@@ -1,0 +1,174 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  PLATFORM_ADMIN
+  ORGANIZER
+  ATTENDEE
+}
+
+enum OrgMemberRole {
+  OWNER
+  ADMIN
+  STAFF
+}
+
+/// Mirrors the 12 supported verticals. Kept as an enum on the backend (unlike
+/// the contract's free-text `category`) so the dashboard/marketplace can
+/// filter and render industry-specific copy without string matching.
+enum Industry {
+  CONCERTS
+  FLIGHTS
+  SPORTS
+  FESTIVALS
+  CONFERENCES
+  BUS
+  MOVIE_THEATERS
+  MUSEUMS
+  TOURIST_ATTRACTIONS
+  PUBLIC_TRANSPORT
+  UNIVERSITIES
+  CORPORATE_EVENTS
+}
+
+enum EventStatus {
+  DRAFT
+  PUBLISHED
+  CANCELLED
+}
+
+/// Cached projection of the on-chain `TicketStatus`. The contract remains the
+/// source of truth; this column exists so listing/search queries don't need
+/// a Soroban RPC round trip, and is reconciled on every write path and by a
+/// periodic reconciliation job.
+enum TicketStatus {
+  VALID
+  USED
+  REVOKED
+  RESALE
+}
+
+enum ResaleListingStatus {
+  ACTIVE
+  SOLD
+  CANCELLED
+}
+
+model User {
+  id               String               @id @default(uuid())
+  email            String               @unique
+  passwordHash     String
+  name             String
+  role             UserRole             @default(ATTENDEE)
+  /// Stellar (G...) address used to receive tickets and settle payments.
+  stellarPublicKey String?              @unique
+  memberships      OrganizationMember[]
+  tickets          Ticket[]
+  resaleListings   ResaleListing[]
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+}
+
+model Organization {
+  id             String               @id @default(uuid())
+  name           String
+  slug           String               @unique
+  industry       Industry
+  /// Stellar (G...) address that signs `create_event`/`issue_ticket` calls
+  /// and receives primary-sale + royalty payments for this organizer.
+  stellarAccount String
+  members        OrganizationMember[]
+  events         Event[]
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+}
+
+model OrganizationMember {
+  id             String        @id @default(uuid())
+  organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organizationId String
+  user           User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId         String
+  role           OrgMemberRole @default(STAFF)
+  createdAt      DateTime      @default(now())
+
+  @@unique([organizationId, userId])
+}
+
+model Event {
+  id                     String       @id @default(uuid())
+  organization           Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organizationId         String
+  name                   String
+  category               Industry
+  venue                  String
+  startsAt               DateTime
+  endsAt                 DateTime?
+  /// The `event_id` (u64) this event was registered under on the ticketing
+  /// contract via `create_event`. Null until the on-chain call succeeds.
+  chainEventId           BigInt?      @unique
+  maxResaleMultiplierBps Int          @default(11000)
+  royaltyBps             Int          @default(500)
+  status                 EventStatus  @default(DRAFT)
+  ticketTypes            TicketType[]
+  tickets                Ticket[]
+  createdAt              DateTime     @default(now())
+  updatedAt              DateTime     @updatedAt
+}
+
+model TicketType {
+  id             String   @id @default(uuid())
+  event          Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  eventId        String
+  name           String
+  /// Face-value price in the platform's settlement token's smallest unit.
+  price          BigInt
+  quantityTotal  Int
+  quantityIssued Int      @default(0)
+  tickets        Ticket[]
+  createdAt      DateTime @default(now())
+
+  @@unique([eventId, name])
+}
+
+model Ticket {
+  id             String          @id @default(uuid())
+  event          Event           @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  eventId        String
+  ticketType     TicketType      @relation(fields: [ticketTypeId], references: [id])
+  ticketTypeId   String
+  owner          User            @relation(fields: [ownerId], references: [id])
+  ownerId        String
+  /// The `ticket_id` (u64) returned by `issue_ticket`/`purchase_primary`.
+  chainTicketId  BigInt          @unique
+  seat           String          @default("unassigned")
+  status         TicketStatus    @default(VALID)
+  /// Opaque per-ticket secret embedded in the scannable QR code; verification
+  /// checks this against the DB *and* the on-chain owner/status before a gate
+  /// scan is accepted, so a photographed QR code alone can't be reused.
+  qrSecret       String          @unique @default(uuid())
+  issuedTxHash   String?
+  checkedInAt    DateTime?
+  resaleListings ResaleListing[]
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+}
+
+model ResaleListing {
+  id        String              @id @default(uuid())
+  ticket    Ticket              @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  ticketId  String
+  seller    User                @relation(fields: [sellerId], references: [id])
+  sellerId  String
+  price     BigInt
+  status    ResaleListingStatus @default(ACTIVE)
+  txHash    String?
+  createdAt DateTime            @default(now())
+  updatedAt DateTime            @updatedAt
+}
