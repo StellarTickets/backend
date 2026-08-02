@@ -157,4 +157,32 @@ describe('EventsService', () => {
       expect(event.status).toBe('PUBLISHED');
     });
   });
+
+  describe('findForOrganization', () => {
+    it('requires membership before listing an organization’s events', async () => {
+      organizations.assertMember.mockRejectedValue(new Error('not a member'));
+
+      await expect(
+        service.findForOrganization('outsider-1', 'org-1'),
+      ).rejects.toThrow('not a member');
+      expect(prisma.event.findMany).not.toHaveBeenCalled();
+    });
+
+    it('returns every event for the organization, drafts included', async () => {
+      prisma.event.findMany.mockResolvedValue([
+        { id: 'event-1', status: 'DRAFT' },
+      ]);
+
+      const events = await service.findForOrganization('organizer-1', 'org-1');
+
+      expect(organizations.assertMember).toHaveBeenCalledWith(
+        'org-1',
+        'organizer-1',
+      );
+      expect(prisma.event.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { organizationId: 'org-1' } }),
+      );
+      expect(events).toEqual([{ id: 'event-1', status: 'DRAFT' }]);
+    });
+  });
 });

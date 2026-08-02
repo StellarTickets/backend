@@ -21,6 +21,15 @@ export class EventsController {
     return this.eventsService.getWithOrg(eventId);
   }
 
+  @Get('organizations/:organizationId/events')
+  @UseGuards(JwtAuthGuard)
+  findForOrganization(
+    @CurrentUser() user: CurrentUserPayload,
+    @Param('organizationId') organizationId: string,
+  ) {
+    return this.eventsService.findForOrganization(user.userId, organizationId);
+  }
+
   @Post('organizations/:organizationId/events')
   @UseGuards(JwtAuthGuard)
   create(

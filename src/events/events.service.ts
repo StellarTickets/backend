@@ -117,6 +117,15 @@ export class EventsService {
     });
   }
 
+  async findForOrganization(userId: string, organizationId: string) {
+    await this.organizations.assertMember(organizationId, userId);
+    return this.prisma.event.findMany({
+      where: { organizationId },
+      include: { ticketTypes: true },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
   /** Picks a random u64 (well within Postgres's signed-bigint range) and reserves it on the event row. */
   private async reserveChainEventId(eventId: string): Promise<bigint> {
     for (let attempt = 0; attempt < 5; attempt++) {
