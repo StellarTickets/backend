@@ -5,6 +5,7 @@ import { AppService } from './app.service';
 import { validate } from './config/env.validation';
 import { PrismaModule } from './prisma/prisma.module';
 import { AuthModule } from './auth/auth.module';
+import { UsersModule } from './users/users.module';
 import { OrganizationsModule } from './organizations/organizations.module';
 import { EventsModule } from './events/events.module';
 import { TicketsModule } from './tickets/tickets.module';
@@ -16,6 +17,7 @@ import { StellarModule } from './stellar/stellar.module';
     PrismaModule,
     StellarModule,
     AuthModule,
+    UsersModule,
     OrganizationsModule,
     EventsModule,
     TicketsModule,
