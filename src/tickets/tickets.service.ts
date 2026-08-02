@@ -347,6 +347,14 @@ export class TicketsService {
     });
   }
 
+  findMine(userId: string) {
+    return this.prisma.ticket.findMany({
+      where: { ownerId: userId },
+      include: { event: true, ticketType: true },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
   // ---- shared helpers ----
 
   private async getTicketTypeWithEvent(ticketTypeId: string) {

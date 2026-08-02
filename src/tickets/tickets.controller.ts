@@ -23,6 +23,11 @@ export class TicketsController {
     return this.ticketsService.findActiveResaleListings();
   }
 
+  @Get('mine')
+  findMine(@CurrentUser() user: CurrentUserPayload) {
+    return this.ticketsService.findMine(user.userId);
+  }
+
   @Get('verify/:qrSecret')
   verify(
     @CurrentUser() user: CurrentUserPayload,

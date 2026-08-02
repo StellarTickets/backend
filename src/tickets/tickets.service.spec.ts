@@ -36,7 +36,12 @@ describe('TicketsService', () => {
   let service: TicketsService;
   let prisma: {
     ticketType: { findUnique: jest.Mock; update: jest.Mock };
-    ticket: { findUnique: jest.Mock; update: jest.Mock; create: jest.Mock };
+    ticket: {
+      findUnique: jest.Mock;
+      update: jest.Mock;
+      create: jest.Mock;
+      findMany: jest.Mock;
+    };
     resaleListing: {
       create: jest.Mock;
       updateMany: jest.Mock;
@@ -51,7 +56,12 @@ describe('TicketsService', () => {
   beforeEach(() => {
     prisma = {
       ticketType: { findUnique: jest.fn(), update: jest.fn() },
-      ticket: { findUnique: jest.fn(), update: jest.fn(), create: jest.fn() },
+      ticket: {
+        findUnique: jest.fn(),
+        update: jest.fn(),
+        create: jest.fn(),
+        findMany: jest.fn(),
+      },
       resaleListing: {
         create: jest.fn(),
         updateMany: jest.fn(),
@@ -306,6 +316,20 @@ describe('TicketsService', () => {
           txHash: '0xabc',
         },
       });
+    });
+  });
+
+  describe('findMine', () => {
+    it('scopes the query to the caller’s own tickets', async () => {
+      prisma.ticket.findMany.mockResolvedValue([
+        { id: 'ticket-1', ownerId: 'owner-1' },
+      ]);
+
+      await service.findMine('owner-1');
+
+      expect(prisma.ticket.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { ownerId: 'owner-1' } }),
+      );
     });
   });
 });
