@@ -67,3 +67,7 @@ deployed instance of the
 [`ticketing`](https://github.com/StellarTickets/blockchain) contract.
 `PLATFORM_SIGNER_SECRET` is used only as a disposable source account for
 read-only simulations — it never signs a write.
+
+## More documentation
+
+See [`docs/`](docs/README.md) for architecture, database, API, and FAQ.
