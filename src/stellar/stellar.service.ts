@@ -328,9 +328,16 @@ export class StellarService {
     ) {
       return tag;
     }
-    this.logger.warn(
+    // Fail closed. This value is persisted straight into the DB status column
+    // and gates entry, so defaulting an UNKNOWN tag to 'Valid' means a
+    // contract/SDK version mismatch silently admits a ticket that may have been
+    // used or revoked on-chain. An explicit failure is recoverable; a wrongly
+    // valid ticket is not.
+    this.logger.error(
       `Unrecognized on-chain ticket status: ${JSON.stringify(raw)}`,
     );
-    return 'Valid';
+    throw new Error(
+      `Unrecognized on-chain ticket status: ${JSON.stringify(raw)}`,
+    );
   }
 }
