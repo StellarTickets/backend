@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, HttpStatus, Param, Post, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import type { CurrentUserPayload } from '../auth/decorators/current-user.decorator';
@@ -37,6 +37,7 @@ export class TicketsController {
   }
 
   @Post('issue')
+  @HttpCode(HttpStatus.OK)
   buildIssueTx(
     @CurrentUser() user: CurrentUserPayload,
     @Body() dto: IssueTicketDto,
@@ -64,6 +65,7 @@ export class TicketsController {
   }
 
   @Post('purchase')
+  @HttpCode(HttpStatus.OK)
   buildPurchaseTx(
     @CurrentUser() user: CurrentUserPayload,
     @Body() dto: PurchasePrimaryDto,
@@ -89,6 +91,7 @@ export class TicketsController {
   }
 
   @Post(':ticketId/transfer')
+  @HttpCode(HttpStatus.OK)
   buildTransferTx(
     @CurrentUser() user: CurrentUserPayload,
     @Param('ticketId') ticketId: string,
@@ -116,6 +119,7 @@ export class TicketsController {
   }
 
   @Post(':ticketId/check-in')
+  @HttpCode(HttpStatus.OK)
   buildCheckInTx(
     @CurrentUser() user: CurrentUserPayload,
     @Param('ticketId') ticketId: string,
@@ -137,6 +141,7 @@ export class TicketsController {
   }
 
   @Post(':ticketId/revoke')
+  @HttpCode(HttpStatus.OK)
   buildRevokeTx(
     @CurrentUser() user: CurrentUserPayload,
     @Param('ticketId') ticketId: string,
@@ -158,6 +163,7 @@ export class TicketsController {
   }
 
   @Post(':ticketId/list-resale')
+  @HttpCode(HttpStatus.OK)
   buildListForResaleTx(
     @CurrentUser() user: CurrentUserPayload,
     @Param('ticketId') ticketId: string,
@@ -185,6 +191,7 @@ export class TicketsController {
   }
 
   @Post(':ticketId/cancel-resale')
+  @HttpCode(HttpStatus.OK)
   buildCancelResaleTx(
     @CurrentUser() user: CurrentUserPayload,
     @Param('ticketId') ticketId: string,
@@ -206,6 +213,7 @@ export class TicketsController {
   }
 
   @Post(':ticketId/buy-resale')
+  @HttpCode(HttpStatus.OK)
   buildBuyResaleTx(
     @CurrentUser() user: CurrentUserPayload,
     @Param('ticketId') ticketId: string,

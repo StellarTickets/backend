@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, HttpStatus, Param, Post, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import type { CurrentUserPayload } from '../auth/decorators/current-user.decorator';
@@ -52,6 +52,7 @@ export class EventsController {
 
   @Post('events/:eventId/publish')
   @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
   buildPublishTx(
     @CurrentUser() user: CurrentUserPayload,
     @Param('eventId') eventId: string,
