@@ -171,4 +171,9 @@ model ResaleListing {
   txHash    String?
   createdAt DateTime            @default(now())
   updatedAt DateTime            @updatedAt
+
+  /// Marketplace reads filter on status (browsing ACTIVE listings), so without
+  /// this every such query is a sequential scan that degrades as sold and
+  /// cancelled rows accumulate and never get deleted.
+  @@index([status])
 }
