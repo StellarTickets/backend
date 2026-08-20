@@ -1,0 +1,42 @@
+import { plainToInstance } from 'class-transformer';
+import { validate } from 'class-validator';
+import { CreateOrganizationDto } from './create-organization.dto';
+
+const VALID_KEY = 'GBAHZWO3UI3GAHPQCPSW6IR5N7HJ4UBRZNAFMSYB6DAKVNHQDOZIV2YJ';
+
+function build(overrides: Record<string, unknown> = {}) {
+  return plainToInstance(CreateOrganizationDto, {
+    name: 'Test Org',
+    slug: 'test-org',
+    industry: 'CONCERTS',
+    stellarAccount: VALID_KEY,
+    ...overrides,
+  });
+}
+
+describe('CreateOrganizationDto', () => {
+  it('accepts a well-formed payload', async () => {
+    const errors = await validate(build());
+    expect(errors).toHaveLength(0);
+  });
+
+  it('rejects an uppercase or spaced slug', async () => {
+    const errors = await validate(build({ slug: 'Not A Slug' }));
+    expect(errors.some((e) => e.property === 'slug')).toBe(true);
+  });
+
+  it('rejects an industry outside the enum', async () => {
+    const errors = await validate(build({ industry: 'CIRCUS' }));
+    expect(errors.some((e) => e.property === 'industry')).toBe(true);
+  });
+
+  it('rejects a name shorter than 2 characters', async () => {
+    const errors = await validate(build({ name: 'A' }));
+    expect(errors.some((e) => e.property === 'name')).toBe(true);
+  });
+
+  it('rejects an invalid stellarAccount', async () => {
+    const errors = await validate(build({ stellarAccount: 'not-valid' }));
+    expect(errors.some((e) => e.property === 'stellarAccount')).toBe(true);
+  });
+});

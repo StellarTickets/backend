@@ -1,0 +1,6 @@
+daysUntilStale: 60
+daysUntilClose: 14
+staleLabel: stale
+markComment: >
+  This issue has been automatically marked as stale due to inactivity
+  and will be closed if no further activity occurs.
