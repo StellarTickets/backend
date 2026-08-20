@@ -4,7 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { OrgMemberRole, UserRole } from '@prisma/client';
+import { OrgMemberRole, Prisma, UserRole } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateOrganizationDto } from './dto/create-organization.dto';
 
@@ -20,17 +20,27 @@ export class OrganizationsService {
       throw new ConflictException('That organization slug is already taken');
     }
 
-    return this.prisma.$transaction(async (tx) => {
-      const org = await tx.organization.create({ data: dto });
-      await tx.organizationMember.create({
-        data: { organizationId: org.id, userId, role: OrgMemberRole.OWNER },
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        const org = await tx.organization.create({ data: dto });
+        await tx.organizationMember.create({
+          data: { organizationId: org.id, userId, role: OrgMemberRole.OWNER },
+        });
+        await tx.user.updateMany({
+          where: { id: userId, role: UserRole.ATTENDEE },
+          data: { role: UserRole.ORGANIZER },
+        });
+        return org;
       });
-      await tx.user.updateMany({
-        where: { id: userId, role: UserRole.ATTENDEE },
-        data: { role: UserRole.ORGANIZER },
-      });
-      return org;
-    });
+    } catch (err) {
+      if (
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        err.code === 'P2002'
+      ) {
+        throw new ConflictException('That organization slug is already taken');
+      }
+      throw err;
+    }
   }
 
   async findMine(userId: string) {

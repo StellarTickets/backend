@@ -171,4 +171,6 @@ model ResaleListing {
   txHash    String?
   createdAt DateTime            @default(now())
   updatedAt DateTime            @updatedAt
+
+  @@index([status])
 }

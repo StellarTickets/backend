@@ -21,6 +21,9 @@ export class EventsService {
 
   async create(userId: string, organizationId: string, dto: CreateEventDto) {
     await this.organizations.assertMember(organizationId, userId);
+    if (dto.endsAt && dto.endsAt <= dto.startsAt) {
+      throw new BadRequestException('endsAt must be after startsAt');
+    }
     return this.prisma.event.create({
       data: {
         organizationId,

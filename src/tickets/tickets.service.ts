@@ -322,6 +322,10 @@ export class TicketsService {
   }
 
   async confirmBuyResale(buyerId: string, ticketId: string, signedXdr: string) {
+    const ticket = await this.getTicketWithOrg(ticketId);
+    if (ticket.status !== TicketStatus.RESALE) {
+      throw new BadRequestException('This ticket is not listed for resale');
+    }
     await this.stellar.submitSignedTransaction(signedXdr);
 
     return this.prisma.$transaction(async (tx) => {

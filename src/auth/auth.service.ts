@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
@@ -32,11 +33,23 @@ export class AuthService {
     }
 
     const passwordHash = await bcrypt.hash(dto.password, BCRYPT_ROUNDS);
-    const user = await this.prisma.user.create({
-      data: { email: dto.email, passwordHash, name: dto.name },
-    });
+    try {
+      const user = await this.prisma.user.create({
+        data: { email: dto.email, passwordHash, name: dto.name },
+      });
 
-    return this.buildAuthResult(user.id, user.email, user.name, user.role);
+      return this.buildAuthResult(user.id, user.email, user.name, user.role);
+    } catch (err) {
+      if (
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        err.code === 'P2002'
+      ) {
+        throw new ConflictException(
+          'An account with this email already exists',
+        );
+      }
+      throw err;
+    }
   }
 
   async login(dto: LoginDto): Promise<AuthResult> {

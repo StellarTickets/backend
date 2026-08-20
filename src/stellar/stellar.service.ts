@@ -328,9 +328,8 @@ export class StellarService {
     ) {
       return tag;
     }
-    this.logger.warn(
+    throw new Error(
       `Unrecognized on-chain ticket status: ${JSON.stringify(raw)}`,
     );
-    return 'Valid';
   }
 }

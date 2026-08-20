@@ -21,6 +21,8 @@ async function bootstrap() {
     }),
   );
 
+  app.enableShutdownHooks();
+
   await app.listen(config.getOrThrow<number>('PORT'));
 }
 void bootstrap();
