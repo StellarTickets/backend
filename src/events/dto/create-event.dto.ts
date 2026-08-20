@@ -10,6 +10,7 @@ import {
   MinLength,
 } from 'class-validator';
 import { Industry } from '@prisma/client';
+import { IsAfter } from '../../common/decorators/is-after.decorator';
 
 export class CreateEventDto {
   @IsString()
@@ -30,6 +31,7 @@ export class CreateEventDto {
   @IsOptional()
   @Type(() => Date)
   @IsDate()
+  @IsAfter('startsAt')
   endsAt?: Date;
 
   /** Basis points cap on resale price relative to face value (10000 = 100%). */
