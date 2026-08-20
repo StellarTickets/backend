@@ -325,6 +325,14 @@ export class TicketsService {
     await this.stellar.submitSignedTransaction(signedXdr);
 
     return this.prisma.$transaction(async (tx) => {
+      // buildBuyResaleTx checks RESALE status, but the listing can be cancelled
+      // or sold in the window between build and confirm. Without re-checking
+      // inside the transaction, this reassigns ownership and marks the ticket
+      // VALID against a listing that is no longer active.
+      const ticket = await tx.ticket.findUnique({ where: { id: ticketId } });
+      if (!ticket || ticket.status !== TicketStatus.RESALE) {
+        throw new BadRequestException('This ticket is not listed for resale');
+      }
       await tx.resaleListing.updateMany({
         where: { ticketId, status: ResaleListingStatus.ACTIVE },
         data: { status: ResaleListingStatus.SOLD },
