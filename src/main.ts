@@ -21,6 +21,11 @@ async function bootstrap() {
     }),
   );
 
+  // Without this, Nest never invokes lifecycle hooks on SIGTERM/SIGINT, so
+  // PrismaService.onModuleDestroy() never runs and Postgres connections are left
+  // dangling on every restart or container rescheduling.
+  app.enableShutdownHooks();
+
   await app.listen(config.getOrThrow<number>('PORT'));
 }
 void bootstrap();
