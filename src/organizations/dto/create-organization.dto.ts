@@ -1,4 +1,11 @@
-import { IsEnum, IsString, Matches, MinLength } from 'class-validator';
+import {
+  IsEnum,
+  IsOptional,
+  IsString,
+  IsUrl,
+  Matches,
+  MinLength,
+} from 'class-validator';
 import { Industry } from '@prisma/client';
 import { IsStellarPublicKey } from '../../common/decorators/is-stellar-public-key.decorator';
 
@@ -17,4 +24,12 @@ export class CreateOrganizationDto {
 
   @IsStellarPublicKey()
   stellarAccount!: string;
+
+  @IsOptional()
+  @IsUrl({ require_protocol: true })
+  logoUrl?: string;
+
+  @IsOptional()
+  @IsUrl({ require_protocol: true })
+  websiteUrl?: string;
 }

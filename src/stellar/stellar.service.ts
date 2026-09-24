@@ -31,6 +31,7 @@ export interface OnChainTicket {
 }
 
 export interface OnChainEvent {
+  eventId: bigint;
   organizer: string;
   name: string;
   category: string;
@@ -95,7 +96,7 @@ export class StellarService {
     const result = await this.simulateRead('get_event', [
       nativeToScVal(chainEventId, { type: 'u64' }),
     ]);
-    return this.decodeEvent(result);
+    return { eventId: chainEventId, ...this.decodeEvent(result) };
   }
 
   buildCreateEventTx(params: {
@@ -320,7 +321,7 @@ export class StellarService {
     };
   }
 
-  private decodeEvent(scVal: xdr.ScVal): OnChainEvent {
+  private decodeEvent(scVal: xdr.ScVal): Omit<OnChainEvent, 'eventId'> {
     const native = scValToNative(scVal) as Record<string, unknown>;
     return {
       organizer: native.organizer as string,

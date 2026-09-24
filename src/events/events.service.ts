@@ -100,6 +100,17 @@ export class EventsService {
     }
 
     const { txHash } = await this.stellar.submitSignedTransaction(signedXdr);
+
+    const onChainEvent = await this.stellar.getEvent(event.chainEventId);
+    if (
+      onChainEvent.eventId !== event.chainEventId ||
+      onChainEvent.organizer !== event.organization.stellarAccount
+    ) {
+      throw new BadRequestException(
+        'Published on-chain event does not match the reserved event id and organizer',
+      );
+    }
+
     return this.prisma.event.update({
       where: { id: eventId },
       data: { status: EventStatus.PUBLISHED, publishedTxHash: txHash },
