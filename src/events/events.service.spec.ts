@@ -23,6 +23,7 @@ describe('EventsService', () => {
   let stellar: {
     buildCreateEventTx: jest.Mock;
     submitSignedTransaction: jest.Mock;
+    getEvent: jest.Mock;
   };
 
   beforeEach(() => {
@@ -40,6 +41,10 @@ describe('EventsService', () => {
       submitSignedTransaction: jest
         .fn()
         .mockResolvedValue({ result: null, txHash: '0xabc' }),
+      getEvent: jest.fn().mockResolvedValue({
+        eventId: 99n,
+        organizer: 'GORG',
+      }),
     };
 
     service = new EventsService(
@@ -129,6 +134,24 @@ describe('EventsService', () => {
       ).rejects.toBeInstanceOf(BadRequestException);
     });
 
+    it('rejects a confirmed transaction whose on-chain event does not match', async () => {
+      prisma.event.findUnique.mockResolvedValue({
+        id: 'event-1',
+        organizationId: 'org-1',
+        chainEventId: 99n,
+        organization: { stellarAccount: 'GORG' },
+      });
+      stellar.getEvent.mockResolvedValue({
+        eventId: 100n,
+        organizer: 'GOTHER',
+      });
+
+      await expect(
+        service.confirmPublish('organizer-1', 'event-1', 'signed-xdr'),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(prisma.event.update).not.toHaveBeenCalled();
+    });
+
     it('submits the signed transaction and marks the event published', async () => {
       prisma.event.findUnique.mockResolvedValue({
         id: 'event-1',
@@ -150,6 +173,7 @@ describe('EventsService', () => {
       expect(stellar.submitSignedTransaction).toHaveBeenCalledWith(
         'signed-xdr',
       );
+      expect(stellar.getEvent).toHaveBeenCalledWith(99n);
       expect(prisma.event.update).toHaveBeenCalledWith({
         where: { id: 'event-1' },
         data: { status: 'PUBLISHED' },
