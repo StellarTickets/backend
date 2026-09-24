@@ -14,10 +14,10 @@ policy — see the note on that at the bottom.
 | Stellar public key | `User.stellarPublicKey` | Where tickets are issued to and payments settle. Public by nature — see "On-chain data" below. Optional; several actions (buying, receiving a ticket) require it to be set first. |
 | Organization membership | `OrganizationMember` | Which organizations a user can act for (issue tickets, check people in, revoke). |
 | Ticket ownership & history | `Ticket`, `ResaleListing` | Which tickets a user holds or has resold, and the transaction hash that produced each state change. |
-| Verification-scan velocity counters | In-process memory only (`ScanRateLimitGuard`) | Abuse prevention — never written to the database, and cleared on every restart. See `docs/RATE_LIMITING.md`. |
+| Verification-scan velocity counters | In-process memory by default (`ScanRateLimitGuard`), or Redis if `RATE_LIMIT_STORE=redis` | Abuse prevention — never written to the database. Memory counters are cleared on every restart; Redis counters expire on their own after `SCAN_RATE_LIMIT_WINDOW_MS`. See `docs/RATE_LIMITING.md`. |
 
 Nothing else is collected server-side: no analytics, no device fingerprinting,
-no IP logging beyond the in-memory rate-limit counters above.
+no IP logging beyond the short-lived rate-limit counters above.
 
 ## On-chain data is public and permanent
 

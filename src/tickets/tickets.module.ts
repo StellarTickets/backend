@@ -10,6 +10,7 @@ import { ScanRateLimitGuard } from '../common/guards/scan-rate-limit.guard';
 import { IdempotencyInterceptor } from '../common/interceptors/idempotency.interceptor';
 import { PromoCodesModule } from '../promo-codes/promo-codes.module';
 import { GatesModule } from '../gates/gates.module';
+import { RateLimitModule } from '../common/rate-limit/rate-limit.module';
 
 @Module({
   imports: [
@@ -18,6 +19,7 @@ import { GatesModule } from '../gates/gates.module';
     NotificationsModule,
     PromoCodesModule,
     GatesModule,
+    RateLimitModule,
   ],
   controllers: [TicketsController],
   providers: [
