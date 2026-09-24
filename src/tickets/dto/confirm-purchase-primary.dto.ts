@@ -3,7 +3,7 @@ import { ConfirmSignedTxDto } from './confirm-signed-tx.dto';
 
 export class ConfirmPurchasePrimaryDto extends ConfirmSignedTxDto {
   @IsUUID()
-  ticketTypeId: string;
+  ticketTypeId!: string;
 
   @IsOptional()
   @IsString()

@@ -5,16 +5,16 @@ import { IsStellarPublicKey } from '../../common/decorators/is-stellar-public-ke
 export class CreateOrganizationDto {
   @IsString()
   @MinLength(2)
-  name: string;
+  name!: string;
 
   @Matches(/^[a-z0-9]+(-[a-z0-9]+)*$/, {
     message: 'slug must be lowercase, alphanumeric, and hyphen-separated',
   })
-  slug: string;
+  slug!: string;
 
   @IsEnum(Industry)
-  industry: Industry;
+  industry!: Industry;
 
   @IsStellarPublicKey()
-  stellarAccount: string;
+  stellarAccount!: string;
 }

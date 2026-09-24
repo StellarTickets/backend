@@ -8,7 +8,7 @@ import { ConnectWalletDto } from './dto/connect-wallet.dto';
 
 class LookupQuery {
   @IsEmail()
-  email: string;
+  email!: string;
 }
 
 @Controller('users')

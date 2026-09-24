@@ -14,20 +14,20 @@ import { Industry } from '@prisma/client';
 export class CreateEventDto {
   @IsString()
   @MinLength(2)
-  name: string;
+  name!: string;
 
   @IsEnum(Industry, {
     message: `category must be one of: ${Object.values(Industry).join(', ')}`,
   })
-  category: Industry;
+  category!: Industry;
 
   @IsString()
   @MinLength(1)
-  venue: string;
+  venue!: string;
 
   @Type(() => Date)
   @IsDate()
-  startsAt: Date;
+  startsAt!: Date;
 
   @IsOptional()
   @Type(() => Date)

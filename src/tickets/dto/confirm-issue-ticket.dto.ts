@@ -3,10 +3,10 @@ import { ConfirmSignedTxDto } from './confirm-signed-tx.dto';
 
 export class ConfirmIssueTicketDto extends ConfirmSignedTxDto {
   @IsUUID()
-  ticketTypeId: string;
+  ticketTypeId!: string;
 
   @IsUUID()
-  toUserId: string;
+  toUserId!: string;
 
   @IsOptional()
   @IsString()
