@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  Header,
   Param,
   Post,
   Query,
@@ -21,6 +22,7 @@ export class EventsController {
   constructor(private readonly eventsService: EventsService) {}
 
   @Get('events')
+  @Header('Cache-Control', 'public, max-age=60, s-maxage=300')
   findPublished() {
     return this.eventsService.findPublished();
   }
