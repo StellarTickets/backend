@@ -45,4 +45,146 @@ describe('env.validate', () => {
     delete (config as Record<string, unknown>).DATABASE_URL;
     expect(() => validate(config)).toThrow();
   });
+
+  describe('API_PREFIX (#250)', () => {
+    it.each(['api', '/api/v1/', 'v1.0', ''])('accepts %p', (API_PREFIX) => {
+      expect(() => validate(validConfig({ API_PREFIX }))).not.toThrow();
+    });
+
+    it.each(['api v1', 'api//v1', 'api?x=1', '../api', 'api/./v1'])(
+      'rejects %p',
+      (API_PREFIX) => {
+        expect(() => validate(validConfig({ API_PREFIX }))).toThrow(
+          /API_PREFIX/,
+        );
+      },
+    );
+  });
+
+  describe('JWT_SECRET strength (#251)', () => {
+    const strongSecret = 'k3Jq9vX2pL7mN4bR8tY1wZ6cF0hG5dSa';
+
+    it('accepts a random secret in production', () => {
+      expect(() =>
+        validate(
+          validConfig({ NODE_ENV: 'production', JWT_SECRET: strongSecret }),
+        ),
+      ).not.toThrow();
+    });
+
+    it('rejects a short secret in production', () => {
+      expect(() =>
+        validate(validConfig({ NODE_ENV: 'production', JWT_SECRET: 'short' })),
+      ).toThrow();
+    });
+
+    it.each([
+      'changeme-changeme-changeme-changeme',
+      'your-jwt-secret-goes-here-1234567890',
+      'CHANGE_ME_TO_A_RANDOM_32_CHARACTER_VALUE',
+      'super-secret-key-for-example-app-2026',
+    ])('rejects the placeholder %p in production', (JWT_SECRET) => {
+      expect(() =>
+        validate(validConfig({ NODE_ENV: 'production', JWT_SECRET })),
+      ).toThrow(/placeholder/);
+    });
+
+    it('rejects a low-variety secret in production', () => {
+      expect(() =>
+        validate(
+          validConfig({ NODE_ENV: 'production', JWT_SECRET: 'ab'.repeat(20) }),
+        ),
+      ).toThrow(/distinct characters/);
+    });
+
+    it('allows placeholder-style secrets outside production', () => {
+      expect(() =>
+        validate(
+          validConfig({
+            NODE_ENV: 'development',
+            JWT_SECRET: 'changeme-changeme-changeme-changeme',
+          }),
+        ),
+      ).not.toThrow();
+    });
+  });
+
+  describe('SOROBAN_RPC_URL / STELLAR_NETWORK pairing (#252)', () => {
+    it.each([
+      ['https://soroban-testnet.stellar.org', 'testnet'],
+      ['https://rpc-futurenet.stellar.org', 'futurenet'],
+      ['https://mainnet.sorobanrpc.com', 'mainnet'],
+      ['http://localhost:8000/soroban/rpc', 'testnet'],
+      ['https://rpc.internal.example.net', 'mainnet'],
+    ])('accepts %s on %s', (SOROBAN_RPC_URL, STELLAR_NETWORK) => {
+      expect(() =>
+        validate(validConfig({ SOROBAN_RPC_URL, STELLAR_NETWORK })),
+      ).not.toThrow();
+    });
+
+    it.each([
+      ['https://soroban-testnet.stellar.org', 'mainnet'],
+      ['https://soroban-testnet.stellar.org', 'futurenet'],
+      ['https://rpc-futurenet.stellar.org', 'testnet'],
+      ['https://mainnet.sorobanrpc.com', 'testnet'],
+    ])('rejects %s on %s', (SOROBAN_RPC_URL, STELLAR_NETWORK) => {
+      expect(() =>
+        validate(validConfig({ SOROBAN_RPC_URL, STELLAR_NETWORK })),
+      ).toThrow(/wrong network passphrase/);
+    });
+
+    it('rejects an RPC URL that is not http(s)', () => {
+      expect(() =>
+        validate(validConfig({ SOROBAN_RPC_URL: 'ftp://rpc.example.com' })),
+      ).toThrow(/http or https/);
+    });
+
+    it('rejects an RPC URL that does not parse', () => {
+      expect(() =>
+        validate(validConfig({ SOROBAN_RPC_URL: 'not a url' })),
+      ).toThrow(/not a valid URL/);
+    });
+  });
+
+  describe('SECRETS_PROVIDER (#253)', () => {
+    it('defaults to env and requires JWT_SECRET', () => {
+      const config = validConfig();
+      delete (config as Record<string, unknown>).JWT_SECRET;
+      expect(() => validate(config)).toThrow(/JWT_SECRET/);
+    });
+
+    it('with file, requires JWT_SECRET_FILE instead of JWT_SECRET', () => {
+      const config = validConfig({ SECRETS_PROVIDER: 'file' });
+      delete (config as Record<string, unknown>).JWT_SECRET;
+      expect(() => validate(config)).toThrow(/JWT_SECRET_FILE/);
+      expect(() =>
+        validate({ ...config, JWT_SECRET_FILE: '/run/secrets/jwt' }),
+      ).not.toThrow();
+    });
+
+    it('with file, ignores a leftover empty JWT_SECRET', () => {
+      expect(() =>
+        validate(
+          validConfig({
+            NODE_ENV: 'production',
+            SECRETS_PROVIDER: 'file',
+            JWT_SECRET: '',
+            JWT_SECRET_FILE: '/run/secrets/jwt',
+          }),
+        ),
+      ).not.toThrow();
+    });
+
+    it('with custom, requires neither', () => {
+      const config = validConfig({ SECRETS_PROVIDER: 'custom' });
+      delete (config as Record<string, unknown>).JWT_SECRET;
+      expect(() => validate(config)).not.toThrow();
+    });
+
+    it('rejects an unknown provider', () => {
+      expect(() =>
+        validate(validConfig({ SECRETS_PROVIDER: 'vault' })),
+      ).toThrow();
+    });
+  });
 });

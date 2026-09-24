@@ -7,4 +7,6 @@
 5. Set `TICKETING_CONTRACT_ID` to the mainnet-deployed contract address
 6. Set `STELLAR_NETWORK=mainnet` and a production `SOROBAN_RPC_URL`
 7. Rotate `JWT_SECRET` and `PLATFORM_SIGNER_SECRET` out of any shared
-   `.env` file into a real secrets manager before going live
+   `.env` file into a real secrets manager before going live. `JWT_SECRET`
+   can be loaded through `SECRETS_PROVIDER=file` or a custom provider — see
+   the "Secret providers" section of `docs/CONFIGURATION.md`
