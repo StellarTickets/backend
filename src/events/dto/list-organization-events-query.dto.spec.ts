@@ -11,6 +11,28 @@ describe('ListOrganizationEventsQueryDto', () => {
     expect(dto.status).toBeUndefined();
   });
 
+  it('inherits the pagination defaults and bounds', async () => {
+    const defaults = plainToInstance(ListOrganizationEventsQueryDto, {});
+    expect(defaults.page).toBe(1);
+    expect(defaults.limit).toBe(20);
+
+    const tooBig = plainToInstance(ListOrganizationEventsQueryDto, {
+      limit: '101',
+    });
+    const errors = await validate(tooBig);
+    expect(errors.map((e) => e.property)).toEqual(['limit']);
+  });
+
+  it('accepts a status filter together with pagination', async () => {
+    const dto = plainToInstance(ListOrganizationEventsQueryDto, {
+      status: 'DRAFT',
+      page: '2',
+      limit: '5',
+    });
+    expect(await validate(dto)).toHaveLength(0);
+    expect(dto).toMatchObject({ status: 'DRAFT', page: 2, limit: 5 });
+  });
+
   it.each(Object.values(EventStatus))('accepts status=%s', async (status) => {
     const dto = plainToInstance(ListOrganizationEventsQueryDto, { status });
     expect(await validate(dto)).toHaveLength(0);

@@ -29,9 +29,45 @@ class EnvironmentVariables {
   @IsOptional()
   RATE_LIMIT_STORE?: string;
 
-  /// Redis connection URL (e.g. redis://localhost:6379). Required only when
-  /// RATE_LIMIT_STORE=redis.
-  @ValidateIf((env: EnvironmentVariables) => env.RATE_LIMIT_STORE === 'redis')
+  /// Where cached entries live. `memory` (default) is per-process; `redis`
+  /// shares them across instances. See docs/CACHING.md.
+  @IsIn(['memory', 'redis'])
+  @IsOptional()
+  CACHE_DRIVER?: string;
+
+  /// Enables the BullMQ-backed outbound webhook queue. Kept as the literal
+  /// strings 'true'/'false' (like the feature flags) because implicit
+  /// conversion would turn the string 'false' into boolean true. Off unless
+  /// 'true'. See docs/WEBHOOKS.md.
+  @IsIn(['true', 'false'])
+  @IsOptional()
+  WEBHOOK_QUEUE_ENABLED?: string;
+
+  /// Total delivery attempts per webhook, the first included. Default 5.
+  @IsInt()
+  @IsOptional()
+  WEBHOOK_QUEUE_ATTEMPTS?: number;
+
+  /// Delay before the first webhook retry, doubling on each further retry.
+  /// Default 5000.
+  @IsInt()
+  @IsOptional()
+  WEBHOOK_QUEUE_BACKOFF_MS?: number;
+
+  /// Set to 'false' to switch off every cron job registered through
+  /// SchedulerModule. On unless 'false'. See docs/SCHEDULER.md.
+  @IsIn(['true', 'false'])
+  @IsOptional()
+  SCHEDULER_ENABLED?: string;
+
+  /// Redis connection URL (e.g. redis://localhost:6379). Required when
+  /// RATE_LIMIT_STORE=redis, CACHE_DRIVER=redis or WEBHOOK_QUEUE_ENABLED=true.
+  @ValidateIf(
+    (env: EnvironmentVariables) =>
+      env.RATE_LIMIT_STORE === 'redis' ||
+      env.CACHE_DRIVER === 'redis' ||
+      env.WEBHOOK_QUEUE_ENABLED === 'true',
+  )
   @IsString()
   REDIS_URL?: string;
 
