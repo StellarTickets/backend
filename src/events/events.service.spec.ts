@@ -18,6 +18,7 @@ describe('EventsService', () => {
       findUnique: jest.Mock;
       findMany: jest.Mock;
     };
+    ticket: { count: jest.Mock };
   };
   let organizations: { assertMember: jest.Mock };
   let stellar: {
@@ -33,6 +34,7 @@ describe('EventsService', () => {
         findUnique: jest.fn(),
         findMany: jest.fn(),
       },
+      ticket: { count: jest.fn() },
     };
     organizations = { assertMember: jest.fn().mockResolvedValue(undefined) };
     stellar = {
@@ -155,6 +157,45 @@ describe('EventsService', () => {
         data: { status: 'PUBLISHED' },
       });
       expect(event.status).toBe('PUBLISHED');
+    });
+  });
+
+  describe('unpublish', () => {
+    it('reverts a published event to draft when no tickets exist', async () => {
+      prisma.event.findUnique.mockResolvedValue({
+        id: 'event-1',
+        organizationId: 'org-1',
+        status: 'PUBLISHED',
+        organization: { stellarAccount: 'GORG' },
+      });
+      prisma.ticket.count.mockResolvedValue(0);
+      prisma.event.update.mockResolvedValue({ id: 'event-1', status: 'DRAFT' });
+
+      const event = await service.unpublish('organizer-1', 'event-1');
+
+      expect(prisma.ticket.count).toHaveBeenCalledWith({
+        where: { eventId: 'event-1' },
+      });
+      expect(prisma.event.update).toHaveBeenCalledWith({
+        where: { id: 'event-1' },
+        data: { status: 'DRAFT' },
+      });
+      expect(event.status).toBe('DRAFT');
+    });
+
+    it('returns conflict when tickets have already been issued', async () => {
+      prisma.event.findUnique.mockResolvedValue({
+        id: 'event-1',
+        organizationId: 'org-1',
+        status: 'PUBLISHED',
+        organization: { stellarAccount: 'GORG' },
+      });
+      prisma.ticket.count.mockResolvedValue(1);
+
+      await expect(
+        service.unpublish('organizer-1', 'event-1'),
+      ).rejects.toMatchObject({ status: 409 });
+      expect(prisma.event.update).not.toHaveBeenCalled();
     });
   });
 

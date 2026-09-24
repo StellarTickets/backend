@@ -59,6 +59,15 @@ export class EventsController {
     return this.eventsService.buildPublishTx(user.userId, eventId);
   }
 
+  @Post('events/:eventId/unpublish')
+  @UseGuards(JwtAuthGuard)
+  unpublish(
+    @CurrentUser() user: CurrentUserPayload,
+    @Param('eventId') eventId: string,
+  ) {
+    return this.eventsService.unpublish(user.userId, eventId);
+  }
+
   @Post('events/:eventId/confirm-publish')
   @UseGuards(JwtAuthGuard)
   confirmPublish(
