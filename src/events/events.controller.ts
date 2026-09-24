@@ -42,7 +42,7 @@ export class EventsController {
     return this.eventsService.findForOrganization(
       user.userId,
       organizationId,
-      query.status,
+      query,
     );
   }
 

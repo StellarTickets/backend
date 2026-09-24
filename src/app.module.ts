@@ -19,6 +19,9 @@ import { PromoCodesModule } from './promo-codes/promo-codes.module';
 import { GatesModule } from './gates/gates.module';
 import { ScannerDevicesModule } from './scanner-devices/scanner-devices.module';
 import { PendingTxModule } from './pending-tx/pending-tx.module';
+import { CacheModule } from './common/cache/cache.module';
+import { SchedulerModule } from './scheduler/scheduler.module';
+import { WebhooksModule } from './webhooks/webhooks.module';
 import { BigIntSerializerInterceptor } from './common/interceptors/bigint-serializer.interceptor';
 import { RequestTimeoutInterceptor } from './common/interceptors/request-timeout.interceptor';
 import { DomainExceptionFilter } from './common/filters/domain-exception.filter';
@@ -26,6 +29,10 @@ import { DomainExceptionFilter } from './common/filters/domain-exception.filter'
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true, validate }),
+    // Reads SCHEDULER_ENABLED from process.env, so it must follow ConfigModule.
+    SchedulerModule.forRoot(),
+    CacheModule,
+    WebhooksModule,
     FeatureFlagsModule,
     PrismaModule,
     StellarModule,

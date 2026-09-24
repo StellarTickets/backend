@@ -9,6 +9,7 @@ import { EventStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { OrganizationsService } from '../organizations/organizations.service';
 import { StellarService } from '../stellar/stellar.service';
+import { DEFAULT_PAGE_LIMIT } from '../common/dto/pagination-query.dto';
 import { CreateEventDto } from './dto/create-event.dto';
 import { CreateTicketTypeDto } from './dto/create-ticket-type.dto';
 
@@ -169,14 +170,28 @@ export class EventsService {
   async findForOrganization(
     userId: string,
     organizationId: string,
-    status?: EventStatus,
+    {
+      status,
+      page = 1,
+      limit = DEFAULT_PAGE_LIMIT,
+    }: { status?: EventStatus; page?: number; limit?: number } = {},
   ) {
     await this.organizations.assertMember(organizationId, userId);
-    return this.prisma.event.findMany({
-      where: { organizationId, ...(status && { status }) },
-      include: { ticketTypes: true },
-      orderBy: { createdAt: 'desc' },
-    });
+    const where = { organizationId, ...(status && { status }) };
+
+    const [items, total] = await Promise.all([
+      this.prisma.event.findMany({
+        where,
+        include: { ticketTypes: true },
+        // id breaks createdAt ties so a row can't repeat or vanish across pages.
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+      this.prisma.event.count({ where }),
+    ]);
+
+    return { items, total, page, limit };
   }
 
   /** Picks a random u64 (well within Postgres's signed-bigint range) and reserves it on the event row. */

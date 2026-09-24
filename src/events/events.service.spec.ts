@@ -17,6 +17,7 @@ describe('EventsService', () => {
       update: jest.Mock;
       findUnique: jest.Mock;
       findMany: jest.Mock;
+      count: jest.Mock;
     };
     ticket: { count: jest.Mock };
     ticketType: { count: jest.Mock };
@@ -35,6 +36,7 @@ describe('EventsService', () => {
         update: jest.fn(),
         findUnique: jest.fn(),
         findMany: jest.fn(),
+        count: jest.fn().mockResolvedValue(0),
       },
       ticket: { count: jest.fn() },
       ticketType: { count: jest.fn().mockResolvedValue(1) },
@@ -256,31 +258,85 @@ describe('EventsService', () => {
       expect(prisma.event.findMany).not.toHaveBeenCalled();
     });
 
-    it('returns every event for the organization, drafts included', async () => {
+    it('returns the organization’s events, drafts included, as a page', async () => {
       prisma.event.findMany.mockResolvedValue([
         { id: 'event-1', status: 'DRAFT' },
       ]);
+      prisma.event.count.mockResolvedValue(1);
 
-      const events = await service.findForOrganization('organizer-1', 'org-1');
+      const page = await service.findForOrganization('organizer-1', 'org-1');
 
       expect(organizations.assertMember).toHaveBeenCalledWith(
         'org-1',
         'organizer-1',
       );
       expect(prisma.event.findMany).toHaveBeenCalledWith(
-        expect.objectContaining({ where: { organizationId: 'org-1' } }),
+        expect.objectContaining({
+          where: { organizationId: 'org-1' },
+          skip: 0,
+          take: 20,
+        }),
       );
-      expect(events).toEqual([{ id: 'event-1', status: 'DRAFT' }]);
+      expect(page).toEqual({
+        items: [{ id: 'event-1', status: 'DRAFT' }],
+        total: 1,
+        page: 1,
+        limit: 20,
+      });
     });
 
     it('narrows the listing to a single status when one is given', async () => {
       prisma.event.findMany.mockResolvedValue([]);
 
-      await service.findForOrganization('organizer-1', 'org-1', 'PUBLISHED');
+      await service.findForOrganization('organizer-1', 'org-1', {
+        status: 'PUBLISHED',
+      });
 
       expect(prisma.event.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
           where: { organizationId: 'org-1', status: 'PUBLISHED' },
+        }),
+      );
+    });
+
+    it('skips the preceding pages and caps the page at the requested limit', async () => {
+      prisma.event.findMany.mockResolvedValue([]);
+
+      const page = await service.findForOrganization('organizer-1', 'org-1', {
+        page: 3,
+        limit: 10,
+      });
+
+      expect(prisma.event.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ skip: 20, take: 10 }),
+      );
+      expect(page).toMatchObject({ page: 3, limit: 10 });
+    });
+
+    it('reports the total across all pages, counted with the same filter', async () => {
+      prisma.event.findMany.mockResolvedValue([{ id: 'event-1' }]);
+      prisma.event.count.mockResolvedValue(45);
+
+      const page = await service.findForOrganization('organizer-1', 'org-1', {
+        status: 'DRAFT',
+        limit: 1,
+      });
+
+      expect(prisma.event.count).toHaveBeenCalledWith({
+        where: { organizationId: 'org-1', status: 'DRAFT' },
+      });
+      expect(page.total).toBe(45);
+      expect(page.items).toHaveLength(1);
+    });
+
+    it('orders by createdAt then id so pages stay stable when timestamps tie', async () => {
+      prisma.event.findMany.mockResolvedValue([]);
+
+      await service.findForOrganization('organizer-1', 'org-1');
+
+      expect(prisma.event.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         }),
       );
     });

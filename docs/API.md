@@ -10,7 +10,10 @@
 | Tickets | `POST /tickets/issue` \| `purchase` + confirm variants, `GET /tickets/verify/:qrSecret`, `GET /tickets/mine`, `GET /tickets/resale`, `GET /tickets/offline-public-keys`, `GET /tickets/:ticketId/offline-token`, and per-ticket `transfer` / `check-in` / `revoke` / `list-resale` / `cancel-resale` / `buy-resale` + their `confirm-*` counterparts |
 
 `GET /organizations/:id/events` accepts an optional `?status=DRAFT|PUBLISHED|CANCELLED`
-filter (any other value is a 400). `POST /organizations/:id/events` rejects a
+filter (any other value is a 400) and is paginated with `?page=` (1-based,
+default `1`) and `?limit=` (default `20`, max `100`; out-of-range values are a
+400). It returns `{ items, total, page, limit }`, newest first, where `total` is
+the count across all pages for the applied filter. `POST /organizations/:id/events` rejects a
 `startsAt` more than a minute in the past (400), and `POST /events/:id/publish`
 returns 409 until the event has at least one ticket type.
 

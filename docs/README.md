@@ -13,6 +13,9 @@
 - [ERROR_HANDLING.md](ERROR_HANDLING.md) — exception handling
 - [OBSERVABILITY.md](OBSERVABILITY.md) — logging/metrics gaps
 - [RATE_LIMITING.md](RATE_LIMITING.md) — scan rate limits, memory vs Redis storage
+- [CACHING.md](CACHING.md) — HTTP cache headers and the memory/Redis application cache
+- [WEBHOOKS.md](WEBHOOKS.md) — optional BullMQ queue for outbound webhooks
+- [SCHEDULER.md](SCHEDULER.md) — cron jobs and the `SCHEDULER_ENABLED` switch
 - [CORS.md](CORS.md) — allowed origins
 - [CONFIGURATION.md](CONFIGURATION.md) — environment variables
 - [PRISMA_7_NOTE.md](PRISMA_7_NOTE.md) — why Prisma is pinned to 6.x
