@@ -15,6 +15,11 @@ limit keyed independently by:
 Either axis tripping the limit rejects the request with `429 Too Many
 Requests`; a request only has to fail one check to be treated as abuse.
 
+The IP comes from `req.ip`. Behind a load balancer or reverse proxy,
+set `TRUST_PROXY` (see [`docs/DEPLOYMENT.md`](DEPLOYMENT.md#running-behind-a-proxy-trust_proxy)).
+Without it, every client shares the proxy's IP and one busy gate can
+rate-limit all the others.
+
 Configurable via environment variables, both optional with defaults:
 
 - `SCAN_RATE_LIMIT_MAX` (default `10`) — max attempts per window, per key.

@@ -47,3 +47,26 @@ have the service return `prisma.$transaction([findMany({ ...toSkipTake(query) })
 and add `@UseInterceptors(PaginatedResponseInterceptor)` to the handler. The
 interceptor turns the `[items, total]` result into a `Paginated<T>` body.
 Handlers can also build the body directly with `paginate(items, total, query)`.
+
+## Conditional GET (ETags)
+
+Every `GET` response carries a weak `ETag` (`W/"..."`), computed by
+Express from the response body (`app.set('etag', 'weak')` in
+`src/app.setup.ts`). A client that re-sends it as `If-None-Match` gets
+`304 Not Modified` with an empty body while the response is unchanged,
+so polling `GET /events` does not re-download an identical list:
+
+```http
+GET /events
+→ 200  ETag: W/"1a2-Lx0..."
+
+GET /events
+If-None-Match: W/"1a2-Lx0..."
+→ 304  (no body)
+```
+
+The ETag is a hash of the serialized response, so it changes whenever
+any event on the page, or the page's `total`, changes. The server still
+runs the query to compute it: the saving is bandwidth and client-side
+parsing, not database work.
+
