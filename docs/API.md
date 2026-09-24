@@ -9,6 +9,10 @@
 | Events | `GET /events`, `GET /events/:id`, `POST /organizations/:id/events`, `POST /events/:id/ticket-types`, `POST /events/:id/publish` + `confirm-publish` |
 | Tickets | `POST /tickets/issue` \| `purchase` + confirm variants, `GET /tickets/verify/:qrSecret`, `GET /tickets/mine`, `GET /tickets/resale`, `GET /tickets/offline-public-keys`, `GET /tickets/:ticketId/offline-token`, and per-ticket `transfer` / `check-in` / `revoke` / `list-resale` / `cancel-resale` / `buy-resale` + their `confirm-*` counterparts |
 
+Paths are shown without a prefix. When `API_PREFIX` is set (e.g.
+`api/v1`), every route except `GET /health` is served under it — see
+`docs/CONFIGURATION.md`.
+
 Every `confirm-*` endpoint relays a wallet-signed XDR envelope
 produced by the matching build endpoint — see the root README for the
 full non-custodial flow.
