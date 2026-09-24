@@ -5,6 +5,7 @@ import {
   IsOptional,
   IsString,
   MinLength,
+  ValidateIf,
   validateSync,
 } from 'class-validator';
 
@@ -21,6 +22,18 @@ class EnvironmentVariables {
 
   @IsString()
   DATABASE_URL!: string;
+
+  /// Where rate-limit counters live. `memory` (default) is per-process;
+  /// `redis` shares them across instances. See docs/RATE_LIMITING.md.
+  @IsIn(['memory', 'redis'])
+  @IsOptional()
+  RATE_LIMIT_STORE?: string;
+
+  /// Redis connection URL (e.g. redis://localhost:6379). Required only when
+  /// RATE_LIMIT_STORE=redis.
+  @ValidateIf((env: EnvironmentVariables) => env.RATE_LIMIT_STORE === 'redis')
+  @IsString()
+  REDIS_URL?: string;
 
   @IsString()
   @MinLength(32)

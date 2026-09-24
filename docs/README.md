@@ -12,7 +12,7 @@
 - [VALIDATION.md](VALIDATION.md) — DTO validation approach
 - [ERROR_HANDLING.md](ERROR_HANDLING.md) — exception handling
 - [OBSERVABILITY.md](OBSERVABILITY.md) — logging/metrics gaps
-- [RATE_LIMITING.md](RATE_LIMITING.md) — known gap
+- [RATE_LIMITING.md](RATE_LIMITING.md) — scan rate limits, memory vs Redis storage
 - [CORS.md](CORS.md) — allowed origins
 - [CONFIGURATION.md](CONFIGURATION.md) — environment variables
 - [PRISMA_7_NOTE.md](PRISMA_7_NOTE.md) — why Prisma is pinned to 6.x

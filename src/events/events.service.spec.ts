@@ -1,4 +1,4 @@
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, ConflictException } from '@nestjs/common';
 
 // See tickets.service.spec.ts for why StellarService is mocked at the
 // module level rather than imported for real.
@@ -19,6 +19,7 @@ describe('EventsService', () => {
       findMany: jest.Mock;
     };
     ticket: { count: jest.Mock };
+    ticketType: { count: jest.Mock };
   };
   let organizations: { assertMember: jest.Mock };
   let stellar: {
@@ -36,6 +37,7 @@ describe('EventsService', () => {
         findMany: jest.fn(),
       },
       ticket: { count: jest.fn() },
+      ticketType: { count: jest.fn().mockResolvedValue(1) },
     };
     organizations = { assertMember: jest.fn().mockResolvedValue(undefined) };
     stellar = {
@@ -84,6 +86,27 @@ describe('EventsService', () => {
       await expect(
         service.buildPublishTx('organizer-1', 'event-1'),
       ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('returns conflict when the event has no ticket types to sell', async () => {
+      prisma.event.findUnique.mockResolvedValue({
+        id: 'event-1',
+        organizationId: 'org-1',
+        status: 'DRAFT',
+        chainEventId: null,
+        organization: { stellarAccount: 'GORG' },
+      });
+      prisma.ticketType.count.mockResolvedValue(0);
+
+      const attempt = service.buildPublishTx('organizer-1', 'event-1');
+
+      await expect(attempt).rejects.toBeInstanceOf(ConflictException);
+      await expect(attempt).rejects.toMatchObject({ status: 409 });
+      expect(prisma.ticketType.count).toHaveBeenCalledWith({
+        where: { eventId: 'event-1' },
+      });
+      expect(prisma.event.update).not.toHaveBeenCalled();
+      expect(stellar.buildCreateEventTx).not.toHaveBeenCalled();
     });
 
     it('reserves a chain event id and builds create_event against the org account', async () => {
@@ -248,6 +271,18 @@ describe('EventsService', () => {
         expect.objectContaining({ where: { organizationId: 'org-1' } }),
       );
       expect(events).toEqual([{ id: 'event-1', status: 'DRAFT' }]);
+    });
+
+    it('narrows the listing to a single status when one is given', async () => {
+      prisma.event.findMany.mockResolvedValue([]);
+
+      await service.findForOrganization('organizer-1', 'org-1', 'PUBLISHED');
+
+      expect(prisma.event.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { organizationId: 'org-1', status: 'PUBLISHED' },
+        }),
+      );
     });
   });
 });

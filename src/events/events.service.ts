@@ -78,6 +78,15 @@ export class EventsService {
         'This event already has a pending or confirmed on-chain id',
       );
     }
+    // Checked before reserving a chain id so a rejected publish burns nothing.
+    const ticketTypeCount = await this.prisma.ticketType.count({
+      where: { eventId },
+    });
+    if (ticketTypeCount === 0) {
+      throw new ConflictException(
+        'Add at least one ticket type before publishing this event',
+      );
+    }
 
     const chainEventId = await this.reserveChainEventId(eventId);
     const unsignedXdr = await this.stellar.buildCreateEventTx({
@@ -157,10 +166,14 @@ export class EventsService {
     });
   }
 
-  async findForOrganization(userId: string, organizationId: string) {
+  async findForOrganization(
+    userId: string,
+    organizationId: string,
+    status?: EventStatus,
+  ) {
     await this.organizations.assertMember(organizationId, userId);
     return this.prisma.event.findMany({
-      where: { organizationId },
+      where: { organizationId, ...(status && { status }) },
       include: { ticketTypes: true },
       orderBy: { createdAt: 'desc' },
     });

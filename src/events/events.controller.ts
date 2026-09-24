@@ -5,6 +5,7 @@ import {
   Header,
   Param,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -14,6 +15,7 @@ import { EventsService } from './events.service';
 import { CreateEventDto } from './dto/create-event.dto';
 import { CreateTicketTypeDto } from './dto/create-ticket-type.dto';
 import { ConfirmPublishDto } from './dto/confirm-publish.dto';
+import { ListOrganizationEventsQueryDto } from './dto/list-organization-events-query.dto';
 
 @Controller()
 export class EventsController {
@@ -35,8 +37,13 @@ export class EventsController {
   findForOrganization(
     @CurrentUser() user: CurrentUserPayload,
     @Param('organizationId') organizationId: string,
+    @Query() query: ListOrganizationEventsQueryDto,
   ) {
-    return this.eventsService.findForOrganization(user.userId, organizationId);
+    return this.eventsService.findForOrganization(
+      user.userId,
+      organizationId,
+      query.status,
+    );
   }
 
   @Post('organizations/:organizationId/events')
