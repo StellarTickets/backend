@@ -1,4 +1,12 @@
-import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Header,
+  Param,
+  Post,
+  UseGuards,
+} from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import type { CurrentUserPayload } from '../auth/decorators/current-user.decorator';
@@ -12,6 +20,7 @@ export class EventsController {
   constructor(private readonly eventsService: EventsService) {}
 
   @Get('events')
+  @Header('Cache-Control', 'public, max-age=60, s-maxage=300')
   findPublished() {
     return this.eventsService.findPublished();
   }
