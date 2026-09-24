@@ -16,3 +16,34 @@ full non-custodial flow.
 `offline-public-keys` / `:ticketId/offline-token` support gate
 verification with no network at the door — see
 `docs/OFFLINE_VERIFICATION.md`.
+
+## Pagination
+
+Offset-paginated listings take `?page=&limit=` (`PaginationQueryDto`,
+`src/common/dto/pagination-query.dto.ts`):
+
+| Param | Default | Rules |
+|---|---|---|
+| `page` | `1` | integer ≥ 1 (1-based) |
+| `limit` | `20` | integer 1–100 |
+
+An out-of-range value is rejected with `400`. The response body is a
+`Paginated<T>` (`src/common/pagination/paginated.ts`):
+
+```json
+{ "items": [ ... ], "total": 57, "page": 2, "limit": 20 }
+```
+
+`total` counts matching rows across all pages. A page past the end
+returns `items: []` with the real `total`.
+
+Currently paginated: `GET /events` (published events, ordered by
+`startsAt` then `id` so rows don't shift between pages).
+`GET /tickets/resale` uses cursor pagination instead
+(`?cursor=&limit=` → `{ items, nextCursor, limit }`).
+
+To paginate a new endpoint, accept `@Query() query: PaginationQueryDto`,
+have the service return `prisma.$transaction([findMany({ ...toSkipTake(query) }), count()])`,
+and add `@UseInterceptors(PaginatedResponseInterceptor)` to the handler. The
+interceptor turns the `[items, total]` result into a `Paginated<T>` body.
+Handlers can also build the body directly with `paginate(items, total, query)`.

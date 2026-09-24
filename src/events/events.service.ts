@@ -8,6 +8,8 @@ import { EventStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { OrganizationsService } from '../organizations/organizations.service';
 import { StellarService } from '../stellar/stellar.service';
+import { PaginationQueryDto } from '../common/dto/pagination-query.dto';
+import { toSkipTake } from '../common/pagination/paginated';
 import { CreateEventDto } from './dto/create-event.dto';
 import { CreateTicketTypeDto } from './dto/create-ticket-type.dto';
 
@@ -116,15 +118,23 @@ export class EventsService {
     return event;
   }
 
-  findPublished() {
-    return this.prisma.event.findMany({
-      where: { status: EventStatus.PUBLISHED },
-      include: {
-        ticketTypes: { where: { isHidden: false } },
-        organization: { select: { name: true, slug: true } },
-      },
-      orderBy: { startsAt: 'asc' },
-    });
+  /** One page of published events plus the total count, for `GET /events`. */
+  findPublished(query: PaginationQueryDto) {
+    const where = { status: EventStatus.PUBLISHED };
+    return this.prisma.$transaction([
+      this.prisma.event.findMany({
+        where,
+        include: {
+          ticketTypes: { where: { isHidden: false } },
+          organization: { select: { name: true, slug: true } },
+        },
+        // `id` breaks ties between events starting at the same time so
+        // rows can't shift between pages.
+        orderBy: [{ startsAt: 'asc' }, { id: 'asc' }],
+        ...toSkipTake(query),
+      }),
+      this.prisma.event.count({ where }),
+    ]);
   }
 
   async findForOrganization(userId: string, organizationId: string) {
