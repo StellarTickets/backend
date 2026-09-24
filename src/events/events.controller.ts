@@ -1,4 +1,13 @@
-import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  Post,
+  Query,
+  UseGuards,
+  UseInterceptors,
+} from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import type { CurrentUserPayload } from '../auth/decorators/current-user.decorator';
@@ -6,14 +15,17 @@ import { EventsService } from './events.service';
 import { CreateEventDto } from './dto/create-event.dto';
 import { CreateTicketTypeDto } from './dto/create-ticket-type.dto';
 import { ConfirmPublishDto } from './dto/confirm-publish.dto';
+import { PaginationQueryDto } from '../common/dto/pagination-query.dto';
+import { PaginatedResponseInterceptor } from '../common/interceptors/paginated-response.interceptor';
 
 @Controller()
 export class EventsController {
   constructor(private readonly eventsService: EventsService) {}
 
   @Get('events')
-  findPublished() {
-    return this.eventsService.findPublished();
+  @UseInterceptors(PaginatedResponseInterceptor)
+  findPublished(@Query() query: PaginationQueryDto) {
+    return this.eventsService.findPublished(query);
   }
 
   @Get('events/:eventId')

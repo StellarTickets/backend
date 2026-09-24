@@ -40,6 +40,19 @@ describe('env.validate', () => {
     ).toThrow();
   });
 
+  it('accepts a valid TRUST_PROXY and treats it as optional', () => {
+    expect(() => validate(validConfig({ TRUST_PROXY: '1' }))).not.toThrow();
+    expect(() =>
+      validate(validConfig({ TRUST_PROXY: 'loopback,10.0.0.0/8' })),
+    ).not.toThrow();
+  });
+
+  it('rejects a malformed TRUST_PROXY at boot', () => {
+    expect(() => validate(validConfig({ TRUST_PROXY: 'on' }))).toThrow(
+      /Invalid environment configuration: Invalid TRUST_PROXY entry "on"/,
+    );
+  });
+
   it('rejects a missing required field', () => {
     const config = validConfig();
     delete (config as Record<string, unknown>).DATABASE_URL;

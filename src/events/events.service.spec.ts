@@ -12,11 +12,13 @@ import type { StellarService } from '../stellar/stellar.service';
 describe('EventsService', () => {
   let service: EventsService;
   let prisma: {
+    $transaction: jest.Mock;
     event: {
       create: jest.Mock;
       update: jest.Mock;
       findUnique: jest.Mock;
       findMany: jest.Mock;
+      count: jest.Mock;
     };
   };
   let organizations: { assertMember: jest.Mock };
@@ -27,11 +29,15 @@ describe('EventsService', () => {
 
   beforeEach(() => {
     prisma = {
+      $transaction: jest.fn((operations: Promise<unknown>[]) =>
+        Promise.all(operations),
+      ),
       event: {
         create: jest.fn(),
         update: jest.fn(),
         findUnique: jest.fn(),
         findMany: jest.fn(),
+        count: jest.fn(),
       },
     };
     organizations = { assertMember: jest.fn().mockResolvedValue(undefined) };
@@ -155,6 +161,41 @@ describe('EventsService', () => {
         data: { status: 'PUBLISHED' },
       });
       expect(event.status).toBe('PUBLISHED');
+    });
+  });
+
+  describe('findPublished', () => {
+    it('returns one page of published events and the total count', async () => {
+      prisma.event.findMany.mockResolvedValue([{ id: 'event-21' }]);
+      prisma.event.count.mockResolvedValue(21);
+
+      const result = await service.findPublished({ page: 2, limit: 20 });
+
+      expect(result).toEqual([[{ id: 'event-21' }], 21]);
+      expect(prisma.event.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { status: 'PUBLISHED' },
+          orderBy: [{ startsAt: 'asc' }, { id: 'asc' }],
+          skip: 20,
+          take: 20,
+        }),
+      );
+      expect(prisma.event.count).toHaveBeenCalledWith({
+        where: { status: 'PUBLISHED' },
+      });
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    });
+
+    it('still hides hidden ticket types', async () => {
+      prisma.event.findMany.mockResolvedValue([]);
+      prisma.event.count.mockResolvedValue(0);
+
+      await service.findPublished({ page: 1, limit: 20 });
+
+      const [args] = prisma.event.findMany.mock.calls[0] as [
+        { include: { ticketTypes: unknown } },
+      ];
+      expect(args.include.ticketTypes).toEqual({ where: { isHidden: false } });
     });
   });
 

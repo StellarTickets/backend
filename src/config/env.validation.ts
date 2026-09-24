@@ -7,6 +7,7 @@ import {
   MinLength,
   validateSync,
 } from 'class-validator';
+import { parseTrustProxy } from './trust-proxy';
 
 class EnvironmentVariables {
   @IsIn(['development', 'test', 'production'])
@@ -28,6 +29,13 @@ class EnvironmentVariables {
 
   @IsString()
   APP_URL: string;
+
+  /// Express `trust proxy` setting: `true`, `false`, a hop count, or a
+  /// comma-separated list of proxy IPs / CIDR ranges. Unset means `false`.
+  /// See docs/DEPLOYMENT.md.
+  @IsString()
+  @IsOptional()
+  TRUST_PROXY?: string;
 
   /// Soroban RPC endpoint the StellarService submits contract calls through.
   @IsString()
@@ -70,6 +78,14 @@ export function validate(config: Record<string, unknown>) {
 
   if (errors.length > 0) {
     throw new Error(`Invalid environment configuration: ${errors.toString()}`);
+  }
+
+  try {
+    parseTrustProxy(validated.TRUST_PROXY);
+  } catch (error) {
+    throw new Error(
+      `Invalid environment configuration: ${(error as Error).message}`,
+    );
   }
 
   return validated;
