@@ -152,7 +152,7 @@ describe('EventsService', () => {
       );
       expect(prisma.event.update).toHaveBeenCalledWith({
         where: { id: 'event-1' },
-        data: { status: 'PUBLISHED' },
+        data: { status: 'PUBLISHED', publishedTxHash: '0xabc' },
       });
       expect(event.status).toBe('PUBLISHED');
     });

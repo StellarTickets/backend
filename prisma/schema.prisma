@@ -113,6 +113,7 @@ model Event {
   /// The `event_id` (u64) this event was registered under on the ticketing
   /// contract via `create_event`. Null until the on-chain call succeeds.
   chainEventId           BigInt?      @unique
+  publishedTxHash        String?
   maxResaleMultiplierBps Int          @default(11000)
   royaltyBps             Int          @default(500)
   status                 EventStatus  @default(DRAFT)
