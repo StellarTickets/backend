@@ -28,8 +28,40 @@ jobs:
       - name: Lint
         run: npx eslint "src/**/*.ts"
 
+      - name: Audit dependencies
+        run: npm run audit:check
+
       - name: Unit tests
         run: npm test
 
       - name: Build
         run: npm run build
+
+  docker-build:
+    name: Build Docker image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker build -t stellar-tickets/backend:ci .
+
+  migration-lint:
+    name: Migration lint (no schema drift)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # No real database is needed — the diff is computed from migration
+      # files and schema.prisma entirely in-process.
+      - name: Check for schema drift
+        env:
+          DATABASE_URL: postgresql://dummy:dummy@localhost:5432/dummy
+        run: npx prisma migrate diff --exit-code --schema prisma/schema.prisma --from-migrations --to-schema-datamodel

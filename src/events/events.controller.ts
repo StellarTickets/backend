@@ -1,4 +1,13 @@
-import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Header,
+  Param,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import type { CurrentUserPayload } from '../auth/decorators/current-user.decorator';
@@ -6,12 +15,14 @@ import { EventsService } from './events.service';
 import { CreateEventDto } from './dto/create-event.dto';
 import { CreateTicketTypeDto } from './dto/create-ticket-type.dto';
 import { ConfirmPublishDto } from './dto/confirm-publish.dto';
+import { ListOrganizationEventsQueryDto } from './dto/list-organization-events-query.dto';
 
 @Controller()
 export class EventsController {
   constructor(private readonly eventsService: EventsService) {}
 
   @Get('events')
+  @Header('Cache-Control', 'public, max-age=60, s-maxage=300')
   findPublished() {
     return this.eventsService.findPublished();
   }
@@ -26,8 +37,13 @@ export class EventsController {
   findForOrganization(
     @CurrentUser() user: CurrentUserPayload,
     @Param('organizationId') organizationId: string,
+    @Query() query: ListOrganizationEventsQueryDto,
   ) {
-    return this.eventsService.findForOrganization(user.userId, organizationId);
+    return this.eventsService.findForOrganization(
+      user.userId,
+      organizationId,
+      query,
+    );
   }
 
   @Post('organizations/:organizationId/events')
@@ -57,6 +73,15 @@ export class EventsController {
     @Param('eventId') eventId: string,
   ) {
     return this.eventsService.buildPublishTx(user.userId, eventId);
+  }
+
+  @Post('events/:eventId/unpublish')
+  @UseGuards(JwtAuthGuard)
+  unpublish(
+    @CurrentUser() user: CurrentUserPayload,
+    @Param('eventId') eventId: string,
+  ) {
+    return this.eventsService.unpublish(user.userId, eventId);
   }
 
   @Post('events/:eventId/confirm-publish')
