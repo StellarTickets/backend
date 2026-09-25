@@ -975,7 +975,13 @@ describe('TicketsService', () => {
         checkInReason: 'scanner_malfunction',
       });
 
-      await service.confirmCheckIn('user-1', 'ticket-1', 'signed-xdr', undefined, 'scanner_malfunction');
+      await service.confirmCheckIn(
+        'user-1',
+        'ticket-1',
+        'signed-xdr',
+        undefined,
+        'scanner_malfunction',
+      );
 
       expect(prisma.ticket.update).toHaveBeenCalledWith(
         expect.objectContaining({

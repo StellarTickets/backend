@@ -7,6 +7,15 @@ import {
 import { Observable } from 'rxjs';
 import { map } from 'rxjs/operators';
 
+if (
+  typeof BigInt.prototype !== 'undefined' &&
+  !(BigInt.prototype as any).toJSON
+) {
+  (BigInt.prototype as any).toJSON = function (this: bigint) {
+    return this.toString();
+  };
+}
+
 /**
  * Serializes BigInt values to strings in JSON responses.
  * Handles nested objects, arrays, and arbitrary deep structures.
@@ -14,9 +23,7 @@ import { map } from 'rxjs/operators';
 @Injectable()
 export class BigIntSerializerInterceptor implements NestInterceptor {
   intercept(_context: ExecutionContext, next: CallHandler): Observable<any> {
-    return next.handle().pipe(
-      map((data) => this.serializeBigInts(data)),
-    );
+    return next.handle().pipe(map((data) => this.serializeBigInts(data)));
   }
 
   private serializeBigInts(value: any): any {
@@ -26,6 +33,10 @@ export class BigIntSerializerInterceptor implements NestInterceptor {
 
     if (typeof value === 'bigint') {
       return value.toString();
+    }
+
+    if (value instanceof Date) {
+      return value;
     }
 
     if (Array.isArray(value)) {

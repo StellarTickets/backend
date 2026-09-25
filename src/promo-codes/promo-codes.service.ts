@@ -11,7 +11,11 @@ import { CreatePromoCodeDto } from './dto/create-promo-code.dto';
 const MAX_PERCENT_BPS = 10_000;
 
 export interface PromoCodeValidationResult {
-  promoCode: { id: string; discountType: PromoCodeDiscountType; discountValue: number };
+  promoCode: {
+    id: string;
+    discountType: PromoCodeDiscountType;
+    discountValue: number;
+  };
   discountedPrice: bigint;
   discountAmount: bigint;
 }
@@ -24,7 +28,9 @@ export class PromoCodesService {
   ) {}
 
   async create(userId: string, eventId: string, dto: CreatePromoCodeDto) {
-    const event = await this.prisma.event.findUnique({ where: { id: eventId } });
+    const event = await this.prisma.event.findUnique({
+      where: { id: eventId },
+    });
     if (!event) {
       throw new NotFoundException('Event not found');
     }
@@ -53,7 +59,9 @@ export class PromoCodesService {
   }
 
   async listForEvent(userId: string, eventId: string) {
-    const event = await this.prisma.event.findUnique({ where: { id: eventId } });
+    const event = await this.prisma.event.findUnique({
+      where: { id: eventId },
+    });
     if (!event) {
       throw new NotFoundException('Event not found');
     }

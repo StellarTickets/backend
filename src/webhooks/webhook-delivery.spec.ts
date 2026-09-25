@@ -58,4 +58,19 @@ describe('deliverWebhook', () => {
       'ECONNRESET',
     );
   });
+
+  it('includes x-webhook-signature header when secret is provided', async () => {
+    const fetchImpl = fetchReturning(200);
+    const deliveryWithSecret = {
+      ...delivery,
+      secret: 'my-secret-key',
+    };
+
+    await deliverWebhook(deliveryWithSecret, { fetchImpl });
+
+    const [, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    const headers = init.headers as Record<string, string>;
+    expect(headers['x-webhook-signature']).toBeDefined();
+    expect(headers['x-webhook-signature']).toMatch(/^sha256=[a-f0-9]{64}$/);
+  });
 });

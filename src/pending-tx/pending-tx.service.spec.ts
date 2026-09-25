@@ -42,7 +42,9 @@ describe('PendingTxService', () => {
     await service.record('issue', 'user-1', {});
 
     const { data } = prisma.pendingTx.create.mock.calls[0][0];
-    expect(data.expiresAt.getTime()).toBeLessThanOrEqual(before + 5 * 60_000 + 1_000);
+    expect(data.expiresAt.getTime()).toBeLessThanOrEqual(
+      before + 5 * 60_000 + 1_000,
+    );
   });
 
   it('deletes expired rows and returns the count removed', async () => {

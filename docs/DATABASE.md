@@ -21,6 +21,21 @@ npx prisma migrate deploy   # production
 1:1 to the on-chain `u64` ids — see `docs/ARCHITECTURE.md` for why the
 chain remains the source of truth despite this cache.
 
+## BigInt Serialization Strategy
+
+Native JavaScript `BigInt` values (used by Prisma for 64-bit/128-bit integer columns like `chainEventId`, `chainTicketId`, and `price`) are not natively JSON-serializable and cause `TypeError: Do not know how to serialize a BigInt` when processed by standard `JSON.stringify()`.
+
+To ensure consistent string output and prevent runtime crashes:
+
+1. **NestJS Response Interceptor (`BigIntSerializerInterceptor`):**
+   - Registered globally in `AppModule`.
+   - Recursively traverses response objects and converts all `bigint` primitives into decimal string representations (`"1234567890"`).
+   - Preserves primitives, arrays, `null`, `undefined`, and `Date` instances.
+
+2. **`BigInt.prototype.toJSON` Polyfill:**
+   - Monkey-patches `BigInt.prototype.toJSON` to return `this.toString()`.
+   - Ensures out-of-pipeline `JSON.stringify(obj)` calls (e.g. loggers, Redis serialization) output stringified BigInts consistently.
+
 ## Backup and restore
 
 All commands below assume a local PostgreSQL instance reachable at

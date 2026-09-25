@@ -51,7 +51,10 @@ describe('GatesService', () => {
 
       await service.create('user-1', 'event-1', { name: 'Main Gate' });
 
-      expect(organizations.assertMember).toHaveBeenCalledWith('org-1', 'user-1');
+      expect(organizations.assertMember).toHaveBeenCalledWith(
+        'org-1',
+        'user-1',
+      );
     });
 
     it('rejects a duplicate gate name for the same event', async () => {

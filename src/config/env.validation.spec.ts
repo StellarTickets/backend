@@ -123,9 +123,7 @@ describe('env.validate', () => {
   });
 
   it('keeps WEBHOOK_QUEUE_ENABLED=false as the string "false"', () => {
-    const validated = validate(
-      validConfig({ WEBHOOK_QUEUE_ENABLED: 'false' }),
-    );
+    const validated = validate(validConfig({ WEBHOOK_QUEUE_ENABLED: 'false' }));
 
     expect(validated.WEBHOOK_QUEUE_ENABLED).toBe('false');
   });

@@ -40,7 +40,9 @@ export class PendingTxCleanupService implements OnModuleInit {
     try {
       const deletedCount = await this.pendingTx.deleteExpired();
       if (deletedCount > 0) {
-        this.logger.log(`Cleaned up ${deletedCount} expired pending transaction(s).`);
+        this.logger.log(
+          `Cleaned up ${deletedCount} expired pending transaction(s).`,
+        );
       }
       return deletedCount;
     } catch (err) {
