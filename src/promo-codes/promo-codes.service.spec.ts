@@ -19,7 +19,11 @@ describe('PromoCodesService', () => {
     prisma = {
       event: { findUnique: jest.fn() },
       ticketType: { findUnique: jest.fn() },
-      promoCode: { findUnique: jest.fn(), create: jest.fn(), update: jest.fn() },
+      promoCode: {
+        findUnique: jest.fn(),
+        create: jest.fn(),
+        update: jest.fn(),
+      },
       promoCodeRedemption: { findUnique: jest.fn(), create: jest.fn() },
       $transaction: jest.fn((cb: (tx: unknown) => unknown) => cb(prisma)),
     };
@@ -105,7 +109,12 @@ describe('PromoCodesService', () => {
       });
       prisma.promoCodeRedemption.findUnique.mockResolvedValue(null);
 
-      const result = await service.validate('event-1', 'user-1', 'save10', 1000n);
+      const result = await service.validate(
+        'event-1',
+        'user-1',
+        'save10',
+        1000n,
+      );
 
       expect(result.discountAmount).toBe(250n);
       expect(result.discountedPrice).toBe(750n);
@@ -123,7 +132,12 @@ describe('PromoCodesService', () => {
       });
       prisma.promoCodeRedemption.findUnique.mockResolvedValue(null);
 
-      const result = await service.validate('event-1', 'user-1', 'BIGSAVE', 1000n);
+      const result = await service.validate(
+        'event-1',
+        'user-1',
+        'BIGSAVE',
+        1000n,
+      );
 
       expect(result.discountAmount).toBe(5000n);
       expect(result.discountedPrice).toBe(0n);

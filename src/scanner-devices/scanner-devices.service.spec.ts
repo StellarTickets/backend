@@ -66,9 +66,9 @@ describe('ScannerDevicesService', () => {
         revokedAt: new Date(),
       });
 
-      await expect(service.authenticate('revoked-token')).rejects.toBeInstanceOf(
-        UnauthorizedException,
-      );
+      await expect(
+        service.authenticate('revoked-token'),
+      ).rejects.toBeInstanceOf(UnauthorizedException);
       expect(prisma.scannerDevice.update).not.toHaveBeenCalled();
     });
 

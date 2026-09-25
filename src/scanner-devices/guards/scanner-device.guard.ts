@@ -36,7 +36,7 @@ export class ScannerDeviceGuard implements CanActivate {
       });
       if (!ticket || ticket.eventId !== device.eventId) {
         throw new UnauthorizedException(
-          'This scanner device is not authorized for this ticket\'s event',
+          "This scanner device is not authorized for this ticket's event",
         );
       }
     }

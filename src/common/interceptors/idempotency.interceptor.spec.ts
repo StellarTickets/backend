@@ -23,16 +23,16 @@ describe('IdempotencyInterceptor', () => {
 
   beforeEach(() => {
     config = { get: jest.fn().mockReturnValue(15) };
-    interceptor = new IdempotencyInterceptor(config as unknown as ConfigService);
+    interceptor = new IdempotencyInterceptor(
+      config as unknown as ConfigService,
+    );
   });
 
   it('passes through untouched when no Idempotency-Key header is sent', async () => {
     const context = buildContext({});
     const handler = buildHandler({ xdr: 'a' });
 
-    const result = await firstValue(
-      interceptor.intercept(context, handler),
-    );
+    const result = await firstValue(interceptor.intercept(context, handler));
 
     expect(handler.handle).toHaveBeenCalledTimes(1);
     expect(result).toEqual({ xdr: 'a' });
@@ -54,7 +54,9 @@ describe('IdempotencyInterceptor', () => {
 
   it('does not share a cached response across different users for the same key', async () => {
     const contextA = buildContext({ 'Idempotency-Key': 'key-1' });
-    await firstValue(interceptor.intercept(contextA, buildHandler({ xdr: 'a' })));
+    await firstValue(
+      interceptor.intercept(contextA, buildHandler({ xdr: 'a' })),
+    );
 
     const contextB = {
       switchToHttp: () => ({
@@ -65,9 +67,7 @@ describe('IdempotencyInterceptor', () => {
       }),
     } as unknown as ExecutionContext;
     const handlerB = buildHandler({ xdr: 'b' });
-    const result = await firstValue(
-      interceptor.intercept(contextB, handlerB),
-    );
+    const result = await firstValue(interceptor.intercept(contextB, handlerB));
 
     expect(handlerB.handle).toHaveBeenCalledTimes(1);
     expect(result).toEqual({ xdr: 'b' });
@@ -77,7 +77,9 @@ describe('IdempotencyInterceptor', () => {
     jest.useFakeTimers().setSystemTime(0);
     config.get.mockReturnValue(1);
     const context = buildContext({ 'Idempotency-Key': 'key-1' });
-    await firstValue(interceptor.intercept(context, buildHandler({ xdr: 'first' })));
+    await firstValue(
+      interceptor.intercept(context, buildHandler({ xdr: 'first' })),
+    );
 
     jest.setSystemTime(2 * 60_000);
     const secondHandler = buildHandler({ xdr: 'second' });

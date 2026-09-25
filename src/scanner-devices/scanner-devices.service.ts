@@ -1,4 +1,8 @@
-import { Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { randomBytes, createHash } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { OrganizationsService } from '../organizations/organizations.service';
@@ -14,8 +18,14 @@ export class ScannerDevicesService {
   ) {}
 
   /** Registers a device and returns its raw bearer token once -- only the hash is persisted. */
-  async register(userId: string, eventId: string, dto: RegisterScannerDeviceDto) {
-    const event = await this.prisma.event.findUnique({ where: { id: eventId } });
+  async register(
+    userId: string,
+    eventId: string,
+    dto: RegisterScannerDeviceDto,
+  ) {
+    const event = await this.prisma.event.findUnique({
+      where: { id: eventId },
+    });
     if (!event) {
       throw new NotFoundException('Event not found');
     }
@@ -29,7 +39,9 @@ export class ScannerDevicesService {
   }
 
   async listForEvent(userId: string, eventId: string) {
-    const event = await this.prisma.event.findUnique({ where: { id: eventId } });
+    const event = await this.prisma.event.findUnique({
+      where: { id: eventId },
+    });
     if (!event) {
       throw new NotFoundException('Event not found');
     }
@@ -62,7 +74,9 @@ export class ScannerDevicesService {
       where: { tokenHash: this.hash(token) },
     });
     if (!device || device.revokedAt) {
-      throw new UnauthorizedException('Invalid or revoked scanner device token');
+      throw new UnauthorizedException(
+        'Invalid or revoked scanner device token',
+      );
     }
     await this.prisma.scannerDevice.update({
       where: { id: device.id },

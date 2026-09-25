@@ -5,6 +5,8 @@ export interface WebhookDelivery {
   event: string;
   /** JSON-serializable body sent under `payload`. */
   payload: unknown;
+  /** Optional secret used to generate HMAC SHA-256 signature sent as `X-Webhook-Signature`. */
+  secret?: string;
 }
 
 /**

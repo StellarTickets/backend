@@ -65,26 +65,43 @@ the queue is disabled, so a caller can tell "queued" from "not sent". It rejects
 if the URL is not `http`/`https` or Redis is unreachable — catch that where a
 Redis outage must not fail the request.
 
-## Delivery
+## Webhook Registration API
 
-The worker POSTs `{ "event": "...", "payload": ... }` as JSON, with an
-`X-Webhook-Event` header, and expects a `2xx` within 10 seconds. Anything else —
-a non-2xx status, a redirect, a timeout, a network error — counts as a failure
-and is retried with exponential backoff until the attempts run out.
+Organizers can manage their registered webhook endpoints under `/v1/organizations/:organizationId/webhooks`:
 
-- **At-least-once.** A delivery whose response was lost is retried, so endpoints
-  must tolerate duplicates.
+- `POST /v1/organizations/:organizationId/webhooks`
+  - Body: `{ "url": "https://example.com/hooks", "events": "ticket.issued", "secret": "optional-secret" }`
+  - Registers a new webhook endpoint. If `secret` is omitted, an opaque random 32-byte hex secret is generated automatically.
+- `GET /v1/organizations/:organizationId/webhooks`
+  - Lists all registered webhook endpoints for the organization.
+- `DELETE /v1/organizations/:organizationId/webhooks/:webhookId`
+  - Deletes a registered webhook endpoint.
+
+## HMAC Signature Header (`X-Webhook-Signature`)
+
+When an endpoint has a secret configured, every delivery includes an `X-Webhook-Signature` header containing an HMAC SHA-256 signature of the raw JSON body:
+
+```
+X-Webhook-Signature: sha256=a591a6d40bf420404a011733cfb7b190d62c65bf0bcda32b57b277d9ad9f146e
+```
+
+### Verifying Signatures
+
+Recipient endpoints should verify the HMAC SHA-256 signature using their endpoint secret:
+
+1. Extract the hex digest from the `X-Webhook-Signature` header (`sha256=<digest>`).
+2. Compute the HMAC SHA-256 digest over the raw HTTP request body string using the endpoint secret.
+3. Perform a constant-time comparison (`crypto.timingSafeEqual`) between the computed signature and header signature.
+
+## Delivery & Attempt Logging
+
+The worker POSTs `{ "event": "...", "payload": ... }` as JSON, with `X-Webhook-Event` and `X-Webhook-Signature` (when secret configured) headers, expecting a `2xx` within 10 seconds. Anything else — a non-2xx status, a redirect, a timeout, a network error — counts as a failure and is retried with exponential backoff until attempts run out.
+
+- **Attempt Logging:** Every delivery attempt is logged via the `WebhookQueue` logger:
+  - Success: `Webhook <event> to <host> succeeded (attempt X/N)`
+  - Failure: `Webhook <event> to <host> failed (attempt X/N, will retry / giving up): <error>`
+- **At-least-once.** A delivery whose response was lost is retried, so endpoints must tolerate duplicates.
 - **Redirects are not followed**, and count as failures.
-- Finished jobs are kept for an hour (up to 1,000) and failed ones for 7 days, so
-  exhausted deliveries can be inspected in Redis. Only the target host is
-  logged; the path and query of a URL can carry a secret.
-- The worker runs inside every app instance (5 jobs at a time each); BullMQ
-  makes each job run on exactly one of them. It is closed, finishing in-flight
-  deliveries first, when the Nest application is closed.
-- Redis errors are logged (`Webhook queue error` / `Webhook worker error`) rather
-  than crashing the process.
-
-## Not included
-
-Payload signing, per-organization subscriptions and a dead-letter view are not
-part of this queue; it is the delivery mechanism they would build on.
+- Finished jobs are kept for an hour (up to 1,000) and failed ones for 7 days, so exhausted deliveries can be inspected in Redis. Only the target host is logged; the path and query of a URL can carry a secret.
+- The worker runs inside every app instance (5 jobs at a time each); BullMQ makes each job run on exactly one of them. It is closed, finishing in-flight deliveries first, when the Nest application is closed.
+- Redis errors are logged (`Webhook queue error` / `Webhook worker error`) rather than crashing the process.

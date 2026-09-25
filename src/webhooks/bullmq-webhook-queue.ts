@@ -24,6 +24,12 @@ export interface WorkerLike {
       err: Error,
     ) => void,
   ): unknown;
+  on(
+    event: 'completed',
+    listener: (
+      job: { data: WebhookDelivery; attemptsMade: number } | undefined,
+    ) => void,
+  ): unknown;
   close(): Promise<void>;
 }
 
@@ -101,6 +107,13 @@ export class BullMqWebhookQueue implements WebhookQueue, OnModuleDestroy {
         `Webhook ${job.data.event} to ${hostOf(job.data.url)} failed ` +
           `(attempt ${job.attemptsMade}/${attempts}, ` +
           `${remaining > 0 ? 'will retry' : 'giving up'}): ${err.message}`,
+      );
+    });
+    worker.on('completed', (job) => {
+      if (!job) return;
+      logger.log(
+        `Webhook ${job.data.event} to ${hostOf(job.data.url)} succeeded ` +
+          `(attempt ${job.attemptsMade}/${attempts})`,
       );
     });
 

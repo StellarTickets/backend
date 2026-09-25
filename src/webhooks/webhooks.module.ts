@@ -5,6 +5,10 @@ import type { BullMqLike } from './bullmq-webhook-queue';
 import { DisabledWebhookQueue } from './disabled-webhook-queue';
 import { WEBHOOK_QUEUE } from './webhook-queue';
 import type { WebhookQueue } from './webhook-queue';
+import { PrismaModule } from '../prisma/prisma.module';
+import { OrganizationsModule } from '../organizations/organizations.module';
+import { WebhooksController } from './webhooks.controller';
+import { WebhooksService } from './webhooks.service';
 
 const DEFAULT_ATTEMPTS = 5;
 const DEFAULT_BACKOFF_MS = 5_000;
@@ -89,13 +93,16 @@ export async function createWebhookQueue(
 }
 
 @Module({
+  imports: [PrismaModule, OrganizationsModule],
+  controllers: [WebhooksController],
   providers: [
+    WebhooksService,
     {
       provide: WEBHOOK_QUEUE,
       inject: [ConfigService],
       useFactory: (config: ConfigService) => createWebhookQueue(config),
     },
   ],
-  exports: [WEBHOOK_QUEUE],
+  exports: [WEBHOOK_QUEUE, WebhooksService],
 })
 export class WebhooksModule {}
