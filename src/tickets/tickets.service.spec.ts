@@ -15,6 +15,7 @@ import {
   ListingInactiveError,
   TicketTypeSoldOutError,
 } from '../common/errors/domain.error';
+import { Prisma } from '@prisma/client';
 import { TicketsService } from './tickets.service';
 import type { PrismaService } from '../prisma/prisma.service';
 import type { OrganizationsService } from '../organizations/organizations.service';
@@ -69,6 +70,7 @@ describe('TicketsService', () => {
       findMany: jest.Mock;
       count: jest.Mock;
       findUnique: jest.Mock;
+      findFirst: jest.Mock;
       update: jest.Mock;
     };
     resalePriceHistory: {
@@ -101,6 +103,7 @@ describe('TicketsService', () => {
         findMany: jest.fn(),
         count: jest.fn().mockResolvedValue(0),
         findUnique: jest.fn(),
+        findFirst: jest.fn().mockResolvedValue(null),
         update: jest.fn(),
       },
       resalePriceHistory: {
@@ -487,6 +490,59 @@ describe('TicketsService', () => {
           },
         },
       });
+    });
+
+    it('rejects listing a ticket that already has an ACTIVE listing (#216)', async () => {
+      prisma.ticket.findUnique.mockResolvedValue({
+        id: 'ticket-1',
+        ownerId: 'owner-1',
+        chainTicketId: 7n,
+        event: {
+          organizationId: 'org-1',
+          organization: { stellarAccount: 'GORG' },
+          maxResaleMultiplierBps: 20_000,
+        },
+        ticketType: { price: 1_000n },
+      });
+      prisma.resaleListing.findFirst.mockResolvedValueOnce({ id: 'existing-listing' });
+
+      await expect(
+        service.confirmListForResale('owner-1', 'ticket-1', '1200', 'signed-xdr'),
+      ).rejects.toBeInstanceOf(ConflictException);
+
+      // Fail fast: the chain is never touched and no listing row is written.
+      expect(stellar.submitSignedTransaction).not.toHaveBeenCalled();
+      expect(prisma.resaleListing.create).not.toHaveBeenCalled();
+    });
+
+    it('maps the DB unique-index violation to 409 when a concurrent create wins (#216)', async () => {
+      prisma.ticket.findUnique.mockResolvedValue({
+        id: 'ticket-1',
+        ownerId: 'owner-1',
+        chainTicketId: 7n,
+        event: {
+          organizationId: 'org-1',
+          organization: { stellarAccount: 'GORG' },
+          maxResaleMultiplierBps: 20_000,
+        },
+        ticketType: { price: 1_000n },
+      });
+      // Both transactions race past the pre-check; the DB partial unique
+      // index rejects the loser with a P2002 on the active-listing index.
+      prisma.$transaction.mockRejectedValueOnce(
+        new Prisma.PrismaClientKnownRequestError(
+          'Unique constraint failed',
+          {
+            code: 'P2002',
+            clientVersion: 'test',
+            meta: { target: ['ticketId', 'ResaleListing_ticketId_active_key'] },
+          },
+        ),
+      );
+
+      await expect(
+        service.confirmListForResale('owner-1', 'ticket-1', '1200', 'signed-xdr'),
+      ).rejects.toBeInstanceOf(ConflictException);
     });
 
     it('enforces soft limit on active resale listings per user (409 Conflict)', async () => {

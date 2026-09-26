@@ -522,6 +522,9 @@ export class TicketsService {
     expiresAt?: string,
   ) {
     await this.assertWithinResaleLimit(userId);
+    // #216 — fail fast when the ticket is already listed before touching the
+    // chain. The DB-level partial unique index remains the source of truth.
+    await this.assertNoActiveResaleListing(ticketId);
     const ticket = await this.getOwnedTicketWithPricingInfo(ticketId, userId);
 
     // #319 — validate price cap at confirm step too (guards against replays)
@@ -533,26 +536,33 @@ export class TicketsService {
 
     const { txHash } = await this.stellar.submitSignedTransaction(signedXdr);
 
-    return this.prisma.$transaction(async (tx) => {
-      await tx.ticket.update({
-        where: { id: ticketId },
-        data: { status: TicketStatus.RESALE },
-      });
-      return tx.resaleListing.create({
-        data: {
-          ticketId,
-          sellerId: userId,
-          price: BigInt(price),
-          txHash,
-          expiresAt: expiresAt ? new Date(expiresAt) : null,
-          priceHistory: {
-            create: {
-              price: BigInt(price),
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        await tx.ticket.update({
+          where: { id: ticketId },
+          data: { status: TicketStatus.RESALE },
+        });
+        return tx.resaleListing.create({
+          data: {
+            ticketId,
+            sellerId: userId,
+            price: BigInt(price),
+            txHash,
+            expiresAt: expiresAt ? new Date(expiresAt) : null,
+            priceHistory: {
+              create: {
+                price: BigInt(price),
+              },
             },
           },
-        },
+        });
       });
-    });
+    } catch (err) {
+      // #216 — a concurrent create raced us past the pre-check: the partial
+      // unique index rejected it, surface it as a 409.
+      this.throwOnResaleConflict(err);
+      throw err;
+    }
   }
 
   async updateResalePrice(userId: string, listingId: string, newPrice: string) {
@@ -883,6 +893,40 @@ export class TicketsService {
       if (targets.includes('seat') || targets.includes('Ticket_eventId_seat')) {
         throw new ConflictException(
           'That seat has already been issued for this event',
+        );
+      }
+    }
+  }
+
+  /**
+   * #216 — application-level guard mirroring the partial unique index
+   * `ResaleListing_ticketId_active_key` (ticketId WHERE status = 'ACTIVE').
+   * The DB remains the source of truth; this check only produces a nicer
+   * 409 before the chain round-trip.
+   */
+  private async assertNoActiveResaleListing(ticketId: string) {
+    const existing = await this.prisma.resaleListing.findFirst({
+      where: { ticketId, status: ResaleListingStatus.ACTIVE },
+      select: { id: true },
+    });
+    if (existing) {
+      throw new ConflictException(
+        'This ticket already has an active resale listing',
+      );
+    }
+  }
+
+  /** Translates the active-listing partial-index violation into a 409. */
+  private throwOnResaleConflict(err: unknown): void {
+    if (
+      err instanceof Prisma.PrismaClientKnownRequestError &&
+      err.code === 'P2002'
+    ) {
+      const target = (err.meta as { target?: unknown } | undefined)?.target;
+      const targets = Array.isArray(target) ? target.join(',') : String(target ?? '');
+      if (targets.includes('ResaleListing_ticketId_active')) {
+        throw new ConflictException(
+          'This ticket already has an active resale listing',
         );
       }
     }
