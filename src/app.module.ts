@@ -26,6 +26,7 @@ import { WebhooksModule } from './webhooks/webhooks.module';
 import { BigIntSerializerInterceptor } from './common/interceptors/bigint-serializer.interceptor';
 import { RequestTimeoutInterceptor } from './common/interceptors/request-timeout.interceptor';
 import { DomainExceptionFilter } from './common/filters/domain-exception.filter';
+import { TracingShutdownService } from './tracing';
 
 @Module({
   imports: [
@@ -53,6 +54,7 @@ import { DomainExceptionFilter } from './common/filters/domain-exception.filter'
   controllers: [AppController],
   providers: [
     AppService,
+    TracingShutdownService,
     {
       provide: APP_INTERCEPTOR,
       useClass: BigIntSerializerInterceptor,

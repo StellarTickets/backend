@@ -1,11 +1,24 @@
-import { NestFactory } from '@nestjs/core';
-import { ValidationPipe, VersioningType } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import helmet from 'helmet';
-import { AppModule } from './app.module';
+import 'dotenv/config';
+import { startTracing } from './tracing';
 
 async function bootstrap() {
+  // Instrumentation must start before Nest and Express are loaded.
+  const tracing = startTracing();
+  const [
+    { NestFactory },
+    { AppModule },
+    { ValidationPipe, VersioningType },
+    { ConfigService },
+    { default: helmet },
+  ] = await Promise.all([
+    import('@nestjs/core'),
+    import('./app.module.js'),
+    import('@nestjs/common'),
+    import('@nestjs/config'),
+    import('helmet'),
+  ]);
   const app = await NestFactory.create(AppModule);
+  if (tracing) app.enableShutdownHooks();
   const config = app.get(ConfigService);
 
   app.use(helmet());

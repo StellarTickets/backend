@@ -350,6 +350,8 @@ and [`docs/CACHING.md`](docs/CACHING.md).
 
 ## Environment
 
+Optional OpenTelemetry tracing is documented in [`docs/TRACING.md`](docs/TRACING.md).
+
 See [`.env.example`](.env.example) and the generated
 [environment variable table](docs/CONFIGURATION.md#environment-variables).
 The Stellar-specific ones are worth calling out:
