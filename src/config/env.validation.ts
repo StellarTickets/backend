@@ -10,16 +10,24 @@ import {
 } from 'class-validator';
 
 class EnvironmentVariables {
+  /// Which NestJS environment the app runs in. Drives logging verbosity and
+  /// whether development-only behaviour is enabled.
   @IsIn(['development', 'test', 'production'])
   NODE_ENV!: string;
 
+  /// TCP port the HTTP server binds. Match it to the `port` in docker-compose.yml
+  /// when running the API in a container.
   @IsInt()
   PORT!: number;
 
+  /// Soft cap on how many `ACTIVE` resale listings one seller may hold at
+  /// once. Listing beyond it is rejected, not queued. See docs/RESALE_EXPIRY.md.
   @IsInt()
   @IsOptional()
   MAX_ACTIVE_RESALE_LISTINGS_PER_USER?: number;
 
+  /// PostgreSQL connection string for the Prisma client. This is the single
+  /// system of record; see docs/DATABASE.md.
   @IsString()
   DATABASE_URL!: string;
 
@@ -71,10 +79,15 @@ class EnvironmentVariables {
   @IsString()
   REDIS_URL?: string;
 
+  /// Secret used to sign and verify JWT access tokens. Must be at least 32
+  /// characters. Rotating it invalidates every issued token. See
+  /// docs/AUTHENTICATION.md.
   @IsString()
   @MinLength(32)
   JWT_SECRET!: string;
 
+  /// Public origin this API is reached at, e.g. http://localhost:3001. Used
+  /// as the CORS allow-list and to build links in outbound email/webhooks.
   @IsString()
   APP_URL!: string;
 
@@ -82,6 +95,9 @@ class EnvironmentVariables {
   @IsString()
   SOROBAN_RPC_URL!: string;
 
+  /// Which Stellar network every contract call targets. Must match the network
+  /// the `ticketing` contract is deployed on and the one user wallets are set
+  /// to, or every submit will fail.
   @IsIn(['testnet', 'futurenet', 'mainnet'])
   STELLAR_NETWORK!: string;
 

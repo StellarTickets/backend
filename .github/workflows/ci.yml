@@ -65,3 +65,19 @@ jobs:
         env:
           DATABASE_URL: postgresql://dummy:dummy@localhost:5432/dummy
         run: npx prisma migrate diff --exit-code --schema prisma/schema.prisma --from-migrations --to-schema-datamodel
+
+  docs-check:
+    name: Docs (generated files up to date)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # Deliberately no `npm ci`: both generators are dependency-free Node
+      # scripts, so this job keeps working even when the lockfile is out of
+      # sync and `npm ci` cannot install anything.
+      - name: Check generated env table and API collection
+        run: npm run docs:check
