@@ -1,4 +1,5 @@
-import { IsOptional, IsString, IsUUID } from 'class-validator';
+import { Transform } from 'class-transformer';
+import { IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
 import { ConfirmSignedTxDto } from './confirm-signed-tx.dto';
 
 export class ConfirmCheckInDto extends ConfirmSignedTxDto {
@@ -9,6 +10,8 @@ export class ConfirmCheckInDto extends ConfirmSignedTxDto {
 
   /** Reason for check-in when scanner fails and staff override is used. */
   @IsOptional()
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @IsString()
+  @MaxLength(512)
   reason?: string;
 }

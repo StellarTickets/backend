@@ -1,4 +1,5 @@
-import { IsOptional, IsString, IsUrl } from 'class-validator';
+import { Transform } from 'class-transformer';
+import { IsOptional, IsString, IsUrl, MaxLength } from 'class-validator';
 
 export class CreateWebhookEndpointDto {
   @IsString()
@@ -13,10 +14,14 @@ export class CreateWebhookEndpointDto {
   url!: string;
 
   @IsOptional()
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @IsString()
+  @MaxLength(512)
   events?: string;
 
   @IsOptional()
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @IsString()
+  @MaxLength(256)
   secret?: string;
 }
