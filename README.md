@@ -239,10 +239,103 @@ and mounts the working directory into the container so edits on the host
 reload the running server. The API is then reachable at
 `http://localhost:3000`.
 
+## Troubleshooting
+
+Errors below were reproduced on a clean checkout of `main`, not copied from an
+issue tracker. Where a fix is a workaround rather than a repair, it says so.
+
+### `npm ci` fails with `EUSAGE` / "can only install packages when your package.json and package-lock.json are in sync"
+
+`package-lock.json` is out of date with `package.json` (it is missing
+`webpack`, and pins stale `enhanced-resolve`, `terser` and `ajv` versions).
+
+**Workaround:** use `npm install` instead. This rewrites the lockfile, so do
+not commit that unless the point of your change is refreshing dependencies.
+
+### `npx tsc --noEmit` reports errors, so `npm run build` and `npm test` fail
+
+`main` does not currently typecheck. There are 9 errors, most of them from one
+cause:
+
+```
+src/pending-tx/pending-tx.service.ts:26: error TS2339:
+  Property 'pendingTx' does not exist on type 'PrismaService'.
+```
+
+The `add_pending_tx` migration creates the table, but **`model PendingTx` is
+missing from `prisma/schema.prisma`**, so the generated Prisma client has no
+`pendingTx` delegate. The other errors are unrelated strictness issues
+(`strictPropertyInitialization` in a few DTOs and specs, and a
+`string | string[]` param in `scanner-device.guard.ts`).
+
+This is a real break in `main`, not a local problem — the same commands run in
+CI. You can still work on docs, which is why this section exists. Fixing it
+means adding the model back to the schema or dropping the module, and that is
+a schema decision rather than a docs change.
+
+### Boot fails with `Invalid environment configuration: An instance of EnvironmentVariables has failed the validation`
+
+The app validates every variable at boot and refuses to start on a missing or
+malformed value. The message lists **all** failures at once, which makes it
+look worse than it is — one unfilled variable is usually the whole cause.
+
+The most common version of this is right after `cp .env.example .env`, where
+every secret is still blank. You must fill in at least:
+
+| Variable | Notes |
+|---| --- |
+| `DATABASE_URL` | Must point at a reachable Postgres, not just be non-empty. |
+| `JWT_SECRET` | At least 32 characters, or you get a `minLength` failure. |
+| `SOROBAN_RPC_URL` | Any Soroban RPC endpoint; testnet is `https://soroban-testnet.stellar.org`. |
+| `TICKETING_CONTRACT_ID` | A deployed `C...` address. |
+| `PLATFORM_SIGNER_SECRET` | A Stellar secret key, used read-only. |
+| `OFFLINE_SIGNING_*` | Three values; see [`docs/OFFLINE_VERIFICATION.md`](docs/OFFLINE_VERIFICATION.md). |
+
+The full list with types and defaults is in
+[`docs/CONFIGURATION.md`](docs/CONFIGURATION.md).
+
+### `Error: P1000: Authentication failed against database server`
+
+`npx prisma migrate dev` could not authenticate with the host in
+`DATABASE_URL`. The credentials in the URL do not match the server. If you
+started the database with `docker compose up`, the defaults are
+`stellartickets` / `stellartickets` on port 5432 — anything else means
+`DATABASE_URL` and the running container disagree.
+
+### `CACHE_DRIVER=redis requires the 'ioredis' package`
+
+`ioredis` is an optional dependency, loaded only when you actually select
+Redis. Same for `RATE_LIMIT_STORE=redis` and `WEBHOOK_QUEUE_ENABLED=true` with
+`bullmq`. Either `npm install ioredis` (and `bullmq`), or stay on the default
+`memory` driver, which is correct for single-instance local development.
+
+### `REDIS_URL is required when CACHE_DRIVER=redis`
+
+`REDIS_URL` is only validated when something needs it. Setting any of
+`CACHE_DRIVER=redis`, `RATE_LIMIT_STORE=redis` or
+`WEBHOOK_QUEUE_ENABLED=true` makes it mandatory, and leaving it unset fails at
+boot rather than at first use.
+
+### CORS errors in the browser console
+
+`APP_URL` is the CORS allow-list origin, not the API's own address. If the
+browser reports a blocked request, `APP_URL` does not match the origin the
+frontend is served from. Note `.env.example` sets `PORT=3000` and
+`APP_URL=http://localhost:3001` — the API on 3000, the frontend on 3001.
+
+### Rate limits or caches behave as if they are per-user
+
+`memory` is the default for both rate limits and cache, and it is
+per-process. With more than one instance, counters and cached entries are not
+shared. Set `RATE_LIMIT_STORE=redis` and `CACHE_DRIVER=redis` for any
+multi-instance deployment — see [`docs/RATE_LIMITING.md`](docs/RATE_LIMITING.md)
+and [`docs/CACHING.md`](docs/CACHING.md).
+
 ## Environment
 
-See [`.env.example`](.env.example) for the full list. The Stellar-specific
-ones are worth calling out:
+See [`.env.example`](.env.example) and the generated
+[environment variable table](docs/CONFIGURATION.md#environment-variables).
+The Stellar-specific ones are worth calling out:
 
 | Variable | Meaning |
 |---|---|
@@ -306,6 +399,23 @@ The [`docs/`](docs/README.md) directory goes deeper on specific topics:
 | [`TESTING.md`](docs/TESTING.md) | Test suite conventions |
 | [`GLOSSARY.md`](docs/GLOSSARY.md) | Extended terminology |
 | [`FAQ.md`](docs/FAQ.md) | Common questions |
+| [`adr/`](docs/adr/README.md) | Architecture decision records — the non-custodial design, Postgres as a chain-state cache, and BigInt serialization |
+| [`bruno/`](docs/bruno/README.md) | Generated API collection for exercising every endpoint |
+| [`CONFIGURATION.md`](docs/CONFIGURATION.md) | Every environment variable, generated from the validator |
+
+### Generated documentation
+
+Two things in `docs/` are generated and must not be hand-edited:
+
+| Generated from | Output | Regenerate |
+|---|---|---|
+| `src/config/env.validation.ts` + `.env.example` | the env table in [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md) | `npm run docs:env` |
+| `src/**/*.controller.ts` + DTOs | [`docs/bruno/`](docs/bruno/README.md) | `npm run docs:api` |
+
+`npm run docs:check` fails if either has drifted from its source, and CI runs
+it on every pull request — so an endpoint added without regenerating, or a
+variable added to `.env.example` but not the validator, fails the build
+instead of quietly going undocumented.
 
 See also [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md),
 and [`CHANGELOG.md`](CHANGELOG.md).
