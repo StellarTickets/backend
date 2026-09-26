@@ -51,6 +51,7 @@ import { RequestTimeoutInterceptor } from './common/interceptors/request-timeout
   controllers: [AppController],
   providers: [
     AppService,
+    TracingShutdownService,
     {
       provide: APP_INTERCEPTOR,
       useClass: BigIntSerializerInterceptor,

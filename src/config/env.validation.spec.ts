@@ -150,6 +150,18 @@ describe('env.validate', () => {
     expect(() => validate(validConfig({ SCHEDULER_ENABLED: 'off' }))).toThrow();
   });
 
+  it('accepts optional tracing configuration and rejects invalid flags', () => {
+    expect(() =>
+      validate(validConfig({ OTEL_TRACING_ENABLED: 'true' })),
+    ).not.toThrow();
+    expect(() =>
+      validate(validConfig({ OTEL_TRACING_ENABLED: 'false' })),
+    ).not.toThrow();
+    expect(() =>
+      validate(validConfig({ OTEL_TRACING_ENABLED: 'yes' })),
+    ).toThrow();
+  });
+
   it('rejects a missing required field', () => {
     const config = validConfig();
     delete (config as Record<string, unknown>).DATABASE_URL;

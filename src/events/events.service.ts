@@ -14,6 +14,8 @@ import { AuditService } from '../audit/audit.service';
 import { DEFAULT_PAGE_LIMIT } from '../common/dto/pagination-query.dto';
 import { CreateEventDto } from './dto/create-event.dto';
 import { CreateTicketTypeDto } from './dto/create-ticket-type.dto';
+import { CACHE_STORE } from '../common/cache/cache-store';
+import { Inject } from '@nestjs/common';
 
 @Injectable()
 export class EventsService {
@@ -22,6 +24,9 @@ export class EventsService {
     private readonly organizations: OrganizationsService,
     private readonly stellar: StellarService,
     @Optional() private readonly audit?: AuditService,
+    @Optional()
+    @Inject(CACHE_STORE)
+    private readonly cache?: { delete(k: string): Promise<void> },
   ) {}
 
   async create(userId: string, organizationId: string, dto: CreateEventDto) {
@@ -42,6 +47,7 @@ export class EventsService {
     await this.audit?.record(userId, 'event.create', 'Event', event.id, {
       organizationId,
     });
+    await this.invalidateCache();
     return event;
   }
 
@@ -137,6 +143,7 @@ export class EventsService {
     await this.audit?.record(userId, 'event.publish', 'Event', eventId, {
       txHash,
     });
+    await this.invalidateCache();
     return published;
   }
 
@@ -157,6 +164,7 @@ export class EventsService {
       data: { status: EventStatus.DRAFT },
     });
     await this.audit?.record(userId, 'event.unpublish', 'Event', eventId);
+    await this.invalidateCache();
     return unpublished;
   }
 
@@ -197,6 +205,7 @@ export class EventsService {
       data: { deletedAt: new Date() },
     });
     await this.audit?.record(userId, 'event.delete', 'Event', eventId);
+    await this.invalidateCache();
     return deleted;
   }
 
@@ -215,6 +224,7 @@ export class EventsService {
       data: { deletedAt: null },
     });
     await this.audit?.record(userId, 'event.restore', 'Event', eventId);
+    await this.invalidateCache();
     return restored;
   }
 
@@ -273,5 +283,14 @@ export class EventsService {
     throw new BadRequestException(
       'Could not allocate an on-chain event id, please retry',
     );
+  }
+
+  private async invalidateCache(): Promise<void> {
+    if (!this.cache) return;
+    try {
+      await this.cache.delete('cache:/v1/events');
+    } catch {
+      // Cache invalidation failure is non-critical
+    }
   }
 }

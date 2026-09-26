@@ -15,6 +15,9 @@ run with a missing or malformed value. See
 | Variable | Type | Required | Default | Validated at boot | Description |
 | --- | --- | --- | --- | --- | --- |
 | `NODE_ENV` | `development \| test \| production` | **required** | `development` | yes | Which NestJS environment the app runs in. Drives logging verbosity and whether development-only behaviour is enabled.
+| `OTEL_TRACING_ENABLED` | `true \| false` | optional | `false` | yes | Opt in to HTTP/NestJS OpenTelemetry spans. Off unless literally 'true'. See docs/TRACING.md.
+| `OTEL_SERVICE_NAME` | string | optional | `stellar-tickets-backend` \* | yes | Service name attached to exported spans; defaults to stellar-tickets-backend.
+| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | string | optional | `http://localhost:4318/v1/traces` \* | yes | OTLP HTTP trace collector URL. Defaults to http://localhost:4318/v1/traces.
 | `PORT` | integer | **required** | `3000` | yes | TCP port the HTTP server binds. Match it to the `port` in docker-compose.yml when running the API in a container.
 | `MAX_ACTIVE_RESALE_LISTINGS_PER_USER` | integer | optional | `5` | yes | Soft cap on how many `ACTIVE` resale listings one seller may hold at once. Listing beyond it is rejected, not queued. See docs/RESALE_EXPIRY.md.
 | `DATABASE_URL` | string | **required** | — | yes | PostgreSQL connection string for the Prisma client. This is the single system of record; see docs/DATABASE.md.
@@ -56,3 +59,24 @@ or malformed. A handful of variables are read directly by `ConfigService`
 without going through validation — they are flagged **no** above. A typo in
 one of those fails *silently* and the feature simply stays on its default, so
 check the spelling if a flag or limit does not take effect.
+
+## Security Headers (Helmet)
+
+The API uses [helmet](https://helmetjs.github.io/) with these defaults:
+- `contentSecurityPolicy`: enabled (configurable via `CSP_DIRECTIVES`)
+- `crossOriginEmbedderPolicy`: enabled
+- `crossOriginOpenerPolicy`: enabled
+- `crossOriginResourcePolicy`: enabled
+- `dnsPrefetchControl`: enabled
+- `frameguard`: enabled (deny)
+- `hidePoweredBy`: enabled
+- `hsts`: enabled (1 year, includeSubDomains)
+- `ieNoOpen`: enabled
+- `noSniff`: enabled
+- `originAgentCluster`: enabled
+- `referrerPolicy`: enabled (no-when-downgrade)
+- `xssFilter`: enabled
+
+Disabled headers (not needed for API-only backend):
+- `x-powered-by`: removed by `hidePoweredBy`
+- `x-dns-prefetch-control`: controlled by `dnsPrefetchControl`

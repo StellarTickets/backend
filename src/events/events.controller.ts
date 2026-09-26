@@ -8,6 +8,7 @@ import {
   Post,
   Query,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
@@ -17,6 +18,7 @@ import { CreateEventDto } from './dto/create-event.dto';
 import { CreateTicketTypeDto } from './dto/create-ticket-type.dto';
 import { ConfirmPublishDto } from './dto/confirm-publish.dto';
 import { ListOrganizationEventsQueryDto } from './dto/list-organization-events-query.dto';
+import { ResponseCacheInterceptor } from '../common/interceptors/response-cache.interceptor';
 
 @Controller()
 export class EventsController {
@@ -24,11 +26,13 @@ export class EventsController {
 
   @Get('events')
   @Header('Cache-Control', 'public, max-age=60, s-maxage=300')
+  @UseInterceptors(ResponseCacheInterceptor)
   findPublished() {
     return this.eventsService.findPublished();
   }
 
   @Get('events/:eventId')
+  @UseInterceptors(ResponseCacheInterceptor)
   findOne(@Param('eventId') eventId: string) {
     return this.eventsService.getWithOrg(eventId);
   }

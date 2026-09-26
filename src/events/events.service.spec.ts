@@ -29,6 +29,7 @@ describe('EventsService', () => {
     submitSignedTransaction: jest.Mock;
     getEvent: jest.Mock;
   };
+  let cache: { delete: jest.Mock };
 
   beforeEach(() => {
     prisma = {
@@ -53,11 +54,14 @@ describe('EventsService', () => {
         organizer: 'GORG',
       }),
     };
+    cache = { delete: jest.fn().mockResolvedValue(undefined) };
 
     service = new EventsService(
       prisma as unknown as PrismaService,
       organizations as unknown as OrganizationsService,
       stellar as unknown as StellarService,
+      undefined,
+      cache,
     );
   });
 
@@ -371,12 +375,12 @@ describe('EventsService', () => {
 
       expect(prisma.event.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: expect.objectContaining({ deletedAt: null }),
+          where: expect.objectContaining({ deletedAt: null }) as never,
         }),
       );
       expect(prisma.event.count).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: expect.objectContaining({ deletedAt: null }),
+          where: expect.objectContaining({ deletedAt: null }) as never,
         }),
       );
     });
@@ -407,7 +411,7 @@ describe('EventsService', () => {
 
       expect(prisma.event.update).toHaveBeenCalledWith({
         where: { id: 'event-1' },
-        data: { deletedAt: expect.any(Date) },
+        data: { deletedAt: expect.any(Date) as never },
       });
     });
 
@@ -425,6 +429,43 @@ describe('EventsService', () => {
         where: { id: 'event-1' },
         data: { deletedAt: null },
       });
+    });
+  });
+
+  describe('cache invalidation', () => {
+    it('invalidates cache on create', async () => {
+      prisma.event.create.mockResolvedValue({ id: 'event-1' });
+      await service.create('user-1', 'org-1', {
+        name: 'Test',
+        category: 'CONCERTS',
+        startsAt: new Date(),
+      } as never);
+      expect(cache.delete).toHaveBeenCalledWith('cache:/v1/events');
+    });
+
+    it('invalidates cache on confirmPublish', async () => {
+      prisma.event.findUnique.mockResolvedValue({
+        ...createEvent({
+          id: 'event-1',
+          organizationId: 'org-1',
+          chainEventId: 99n,
+        }),
+        organization: createOrganization({ stellarAccount: 'GORG' }),
+      });
+      prisma.event.update.mockResolvedValue({ id: 'event-1' });
+      await service.confirmPublish('organizer-1', 'event-1', 'signed-xdr');
+      expect(cache.delete).toHaveBeenCalledWith('cache:/v1/events');
+    });
+
+    it('invalidates cache on softDelete', async () => {
+      prisma.event.findUnique.mockResolvedValue({
+        ...createEvent({ id: 'event-1', organizationId: 'org-1' }),
+        deletedAt: null,
+        organization: createOrganization({ stellarAccount: 'GORG' }),
+      });
+      prisma.event.update.mockResolvedValue({ id: 'event-1' });
+      await service.softDelete('organizer-1', 'event-1');
+      expect(cache.delete).toHaveBeenCalledWith('cache:/v1/events');
     });
   });
 });
