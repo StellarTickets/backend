@@ -1,5 +1,9 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { INestApplication, ValidationPipe, VersioningType } from '@nestjs/common';
+import {
+  INestApplication,
+  ValidationPipe,
+  VersioningType,
+} from '@nestjs/common';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { AppModule } from './../src/app.module';
@@ -51,18 +55,17 @@ describe('ValidationPipe Global Config (e2e)', () => {
         .expect(400)
         .expect((res) => {
           expect(res.body).toHaveProperty('message');
-          expect(Array.isArray(res.body.message) || typeof res.body.message === 'string').toBe(
-            true,
-          );
+          expect(
+            Array.isArray(res.body.message) ||
+              typeof res.body.message === 'string',
+          ).toBe(true);
         });
     });
   });
 
   describe('Whitespace trimming and validation', () => {
     it('should enforce validation on trimmed string fields', () => {
-      return request(app.getHttpServer())
-        .get('/v1/industries')
-        .expect(200);
+      return request(app.getHttpServer()).get('/v1/industries').expect(200);
     });
   });
 });

@@ -37,18 +37,12 @@ export class OrganizationsController {
   }
 
   @Delete(':id')
-  softDelete(
-    @CurrentUser() user: CurrentUserPayload,
-    @Param('id') id: string,
-  ) {
+  softDelete(@CurrentUser() user: CurrentUserPayload, @Param('id') id: string) {
     return this.organizationsService.softDelete(user.userId, id);
   }
 
   @Post(':id/restore')
-  restore(
-    @CurrentUser() user: CurrentUserPayload,
-    @Param('id') id: string,
-  ) {
+  restore(@CurrentUser() user: CurrentUserPayload, @Param('id') id: string) {
     return this.organizationsService.restore(user.userId, id);
   }
 }

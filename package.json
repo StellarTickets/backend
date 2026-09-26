@@ -48,11 +48,7 @@
     "@nestjs/passport": "^11.0.5",
     "@nestjs/platform-express": "^11.0.1",
     "@nestjs/schedule": "^5.0.1",
-    "@opentelemetry/exporter-trace-otlp-http": "^0.222.0",
-    "@opentelemetry/instrumentation-express": "^0.70.0",
-    "@opentelemetry/instrumentation-http": "^0.222.0",
-    "@opentelemetry/instrumentation-nestjs-core": "^0.68.0",
-    "@opentelemetry/sdk-node": "^0.222.0",
+    "@nestjs/swagger": "^12.0.2",
     "@prisma/client": "6.19.3",
     "@stellar/stellar-sdk": "^16.2.0",
     "bcrypt": "^6.0.0",
@@ -63,7 +59,8 @@
     "passport": "^0.7.0",
     "passport-jwt": "^4.0.1",
     "reflect-metadata": "^0.2.2",
-    "rxjs": "^7.8.1"
+    "rxjs": "^7.8.1",
+    "swagger-ui-express": "^5.0.1"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.2.0",
@@ -109,6 +106,9 @@
     "transformIgnorePatterns": [
       "/node_modules/(?!(@stellar/stellar-sdk|@noble|uint8array-extras)/)"
     ],
+    "moduleNameMapper": {
+      "^@nestjs/swagger$": "<rootDir>/../test/mocks/swagger.mock.ts"
+    },
     "collectCoverageFrom": [
       "**/*.(t|j)s"
     ],

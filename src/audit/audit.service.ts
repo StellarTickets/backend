@@ -21,9 +21,7 @@ export class AuditService {
   ): Promise<void> {
     if (!this.prisma) return;
     const delegate = (this.prisma as unknown as Record<string, unknown>)
-      .auditLog as
-      | { create: (args: unknown) => Promise<unknown> }
-      | undefined;
+      .auditLog as { create: (args: unknown) => Promise<unknown> } | undefined;
     if (!delegate) return;
     try {
       await delegate.create({

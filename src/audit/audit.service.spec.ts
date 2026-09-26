@@ -4,7 +4,7 @@ describe('AuditService (#209)', () => {
   it('stores actor, action, entity and timestamp via prisma.auditLog.create', async () => {
     const create = jest.fn().mockResolvedValue({ id: 'log-1' });
     const prisma = { auditLog: { create } } as never;
-    const service = new AuditService(prisma as never);
+    const service = new AuditService(prisma);
 
     await service.record('user-1', 'ticket.revoke', 'Ticket', 'ticket-1', {
       eventId: 'event-1',
@@ -26,7 +26,7 @@ describe('AuditService (#209)', () => {
       .fn()
       .mockRejectedValue(new Error('audit table unavailable'));
     const prisma = { auditLog: { create } } as never;
-    const service = new AuditService(prisma as never);
+    const service = new AuditService(prisma);
 
     await expect(
       service.record('user-1', 'event.create', 'Event', 'event-1'),

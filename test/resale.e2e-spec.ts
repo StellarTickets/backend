@@ -1,5 +1,9 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { INestApplication, ValidationPipe, VersioningType } from '@nestjs/common';
+import {
+  INestApplication,
+  ValidationPipe,
+  VersioningType,
+} from '@nestjs/common';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { randomUUID } from 'node:crypto';
@@ -33,10 +37,12 @@ describe('Resale flow (e2e)', () => {
       .mockResolvedValue({ txHash: 'b'.repeat(64) }),
   };
 
-  async function seedTicket(overrides: {
-    price?: bigint;
-    maxResaleMultiplierBps?: number;
-  } = {}) {
+  async function seedTicket(
+    overrides: {
+      price?: bigint;
+      maxResaleMultiplierBps?: number;
+    } = {},
+  ) {
     const seller = await prisma.user.create({
       data: createUser({
         id: randomUUID(),

@@ -36,7 +36,7 @@ export class MemoryCacheStore implements CacheStore {
       json = serializeCacheValue(value);
     } catch (err) {
       // Reject rather than throw, so callers see the same async contract as Redis.
-      return Promise.reject(err as Error);
+      return Promise.reject(err);
     }
 
     // Re-insert so a refreshed key counts as the newest for eviction.
