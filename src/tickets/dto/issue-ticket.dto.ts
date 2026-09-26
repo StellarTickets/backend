@@ -1,5 +1,6 @@
-import { IsOptional, IsString, IsUUID } from 'class-validator';
+import { IsOptional, IsUUID } from 'class-validator';
 import { IsStellarPublicKey } from '../../common/decorators/is-stellar-public-key.decorator';
+import { IsSeat } from '../../common/decorators/is-seat.decorator';
 
 export class IssueTicketDto {
   @IsUUID()
@@ -13,6 +14,6 @@ export class IssueTicketDto {
   toPublicKey!: string;
 
   @IsOptional()
-  @IsString()
+  @IsSeat()
   seat?: string;
 }

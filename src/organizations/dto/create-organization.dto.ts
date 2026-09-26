@@ -1,22 +1,27 @@
+import { Transform } from 'class-transformer';
 import {
   IsEnum,
   IsOptional,
   IsString,
   IsUrl,
   Matches,
+  MaxLength,
   MinLength,
 } from 'class-validator';
 import { Industry } from '@prisma/client';
 import { IsStellarPublicKey } from '../../common/decorators/is-stellar-public-key.decorator';
 
 export class CreateOrganizationDto {
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @IsString()
   @MinLength(2)
+  @MaxLength(256)
   name!: string;
 
   @Matches(/^[a-z0-9]+(-[a-z0-9]+)*$/, {
     message: 'slug must be lowercase, alphanumeric, and hyphen-separated',
   })
+  @MaxLength(128)
   slug!: string;
 
   @IsEnum(Industry)

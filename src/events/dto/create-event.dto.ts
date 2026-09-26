@@ -1,4 +1,4 @@
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
   IsDate,
   IsEnum,
@@ -6,6 +6,7 @@ import {
   IsOptional,
   IsString,
   Max,
+  MaxLength,
   Min,
   MinDate,
   MinLength,
@@ -20,8 +21,10 @@ import { Industry } from '@prisma/client';
 export const STARTS_AT_PAST_TOLERANCE_MS = 60_000;
 
 export class CreateEventDto {
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @IsString()
   @MinLength(2)
+  @MaxLength(256)
   name!: string;
 
   @IsEnum(Industry, {
@@ -29,8 +32,10 @@ export class CreateEventDto {
   })
   category!: Industry;
 
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @IsString()
   @MinLength(1)
+  @MaxLength(256)
   venue!: string;
 
   @Type(() => Date)

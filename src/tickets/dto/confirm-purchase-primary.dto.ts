@@ -1,4 +1,5 @@
 import { IsOptional, IsString, IsUUID, Length } from 'class-validator';
+import { IsSeat } from '../../common/decorators/is-seat.decorator';
 import { ConfirmSignedTxDto } from './confirm-signed-tx.dto';
 
 export class ConfirmPurchasePrimaryDto extends ConfirmSignedTxDto {
@@ -6,7 +7,7 @@ export class ConfirmPurchasePrimaryDto extends ConfirmSignedTxDto {
   ticketTypeId!: string;
 
   @IsOptional()
-  @IsString()
+  @IsSeat()
   seat?: string;
 
   @IsOptional()
