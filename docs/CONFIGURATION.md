@@ -59,3 +59,24 @@ or malformed. A handful of variables are read directly by `ConfigService`
 without going through validation — they are flagged **no** above. A typo in
 one of those fails *silently* and the feature simply stays on its default, so
 check the spelling if a flag or limit does not take effect.
+
+## Security Headers (Helmet)
+
+The API uses [helmet](https://helmetjs.github.io/) with these defaults:
+- `contentSecurityPolicy`: enabled (configurable via `CSP_DIRECTIVES`)
+- `crossOriginEmbedderPolicy`: enabled
+- `crossOriginOpenerPolicy`: enabled
+- `crossOriginResourcePolicy`: enabled
+- `dnsPrefetchControl`: enabled
+- `frameguard`: enabled (deny)
+- `hidePoweredBy`: enabled
+- `hsts`: enabled (1 year, includeSubDomains)
+- `ieNoOpen`: enabled
+- `noSniff`: enabled
+- `originAgentCluster`: enabled
+- `referrerPolicy`: enabled (no-when-downgrade)
+- `xssFilter`: enabled
+
+Disabled headers (not needed for API-only backend):
+- `x-powered-by`: removed by `hidePoweredBy`
+- `x-dns-prefetch-control`: controlled by `dnsPrefetchControl`
