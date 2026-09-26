@@ -54,6 +54,7 @@ function buildTicketType(overrides: Partial<Record<string, unknown>> = {}) {
 describe('TicketsService', () => {
   let service: TicketsService;
   let prisma: {
+    $queryRaw: jest.Mock;
     ticketType: { findUnique: jest.Mock; update: jest.Mock };
     ticket: {
       findUnique: jest.Mock;
@@ -87,6 +88,9 @@ describe('TicketsService', () => {
 
   beforeEach(() => {
     prisma = {
+      $queryRaw: jest
+        .fn()
+        .mockResolvedValue([{ quantityIssued: 0, quantityTotal: 100 }]),
       ticketType: { findUnique: jest.fn(), update: jest.fn() },
       ticket: {
         findUnique: jest.fn(),
@@ -253,6 +257,60 @@ describe('TicketsService', () => {
         ownerId: 'buyer-1',
         seat: 'A1',
       });
+    });
+
+    it('locks the TicketType row and re-checks capacity under the lock (#217)', async () => {
+      prisma.ticketType.findUnique.mockResolvedValue(buildTicketType());
+      prisma.user.findUnique.mockResolvedValue(
+        createUser({ id: 'buyer-1', stellarPublicKey: 'GBUYER' }),
+      );
+      prisma.ticketType.update.mockResolvedValue({});
+      prisma.ticket.create.mockResolvedValue(
+        createTicket({ id: 'ticket-new', ownerId: 'buyer-1' }),
+      );
+
+      await service.confirmIssue(
+        'organizer-1',
+        'tt-1',
+        'buyer-1',
+        'GBUYER',
+        undefined,
+        'signed-xdr',
+      );
+
+      // The row lock precedes the increment inside the same transaction.
+      expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
+      const [query] = prisma.$queryRaw.mock.calls[0];
+      expect(query[0]).toContain('FOR UPDATE');
+      expect(prisma.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
+        prisma.ticketType.update.mock.invocationCallOrder[0],
+      );
+    });
+
+    it('uses the locked row as the capacity authority, not the stale read (#217)', async () => {
+      prisma.ticketType.findUnique.mockResolvedValue(buildTicketType());
+      prisma.user.findUnique.mockResolvedValue(
+        createUser({ id: 'buyer-1', stellarPublicKey: 'GBUYER' }),
+      );
+      // The stale pre-transaction read said capacity was available, but the
+      // locked row shows a concurrent transaction already filled the tier.
+      prisma.$queryRaw.mockResolvedValueOnce([
+        { quantityIssued: 100, quantityTotal: 100 },
+      ]);
+
+      await expect(
+        service.confirmIssue(
+          'organizer-1',
+          'tt-1',
+          'buyer-1',
+          'GBUYER',
+          undefined,
+          'signed-xdr',
+        ),
+      ).rejects.toBeInstanceOf(TicketTypeSoldOutError);
+
+      expect(prisma.ticketType.update).not.toHaveBeenCalled();
+      expect(prisma.ticket.create).not.toHaveBeenCalled();
     });
 
     it('rejects a duplicate assigned seat for the same event (#211)', async () => {

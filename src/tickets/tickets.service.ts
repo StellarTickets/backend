@@ -95,6 +95,18 @@ export class TicketsService {
 
     try {
       return await this.prisma.$transaction(async (tx) => {
+        // #217 — serialize concurrent issuances: lock the TicketType row and
+        // re-check capacity FROM the locked row. The pre-transaction
+        // assertHasCapacity only sees a possibly-stale read.
+        const locked = await tx.$queryRaw<
+          { quantityIssued: number; quantityTotal: number }[]
+        >`SELECT "quantityIssued", "quantityTotal" FROM "TicketType" WHERE "id" = ${ticketTypeId} FOR UPDATE`;
+        const row = locked[0];
+        if (!row) {
+          throw new BadRequestException('Ticket type not found');
+        }
+        this.assertHasCapacity(row.quantityIssued, row.quantityTotal);
+
         await tx.ticketType.update({
           where: { id: ticketTypeId },
           data: { quantityIssued: { increment: 1 } },
@@ -171,6 +183,19 @@ export class TicketsService {
     let ticket;
     try {
       ticket = await this.prisma.$transaction(async (tx) => {
+        // #217 — serialize concurrent purchases: lock the TicketType row and
+        // re-check capacity FROM the locked row, so concurrent buyers cannot
+        // both pass the pre-transaction capacity check and oversell
+        // quantityTotal.
+        const locked = await tx.$queryRaw<
+          { quantityIssued: number; quantityTotal: number }[]
+        >`SELECT "quantityIssued", "quantityTotal" FROM "TicketType" WHERE "id" = ${ticketTypeId} FOR UPDATE`;
+        const row = locked[0];
+        if (!row) {
+          throw new BadRequestException('Ticket type not found');
+        }
+        this.assertHasCapacity(row.quantityIssued, row.quantityTotal);
+
         await tx.ticketType.update({
           where: { id: ticketTypeId },
           data: { quantityIssued: { increment: 1 } },
