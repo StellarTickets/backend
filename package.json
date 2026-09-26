@@ -29,8 +29,7 @@
     "db:migrate": "prisma migrate dev",
     "db:migrate:deploy": "prisma migrate deploy",
     "db:reset": "prisma migrate reset --force",
-    "db:seed": "prisma db seed",
-    "prepare": "husky"
+    "db:seed": "prisma db seed"
   },
   "prisma": {
     "seed": "ts-node --transpile-only prisma/seed.ts"
@@ -49,11 +48,17 @@
     "@nestjs/passport": "^11.0.5",
     "@nestjs/platform-express": "^11.0.1",
     "@nestjs/schedule": "^5.0.1",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.222.0",
+    "@opentelemetry/instrumentation-express": "^0.70.0",
+    "@opentelemetry/instrumentation-http": "^0.222.0",
+    "@opentelemetry/instrumentation-nestjs-core": "^0.68.0",
+    "@opentelemetry/sdk-node": "^0.222.0",
     "@prisma/client": "6.19.3",
     "@stellar/stellar-sdk": "^16.2.0",
     "bcrypt": "^6.0.0",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.15.1",
+    "dotenv": "^18.0.4",
     "helmet": "^8.3.0",
     "passport": "^0.7.0",
     "passport-jwt": "^4.0.1",

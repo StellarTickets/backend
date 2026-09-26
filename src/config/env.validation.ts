@@ -15,6 +15,22 @@ class EnvironmentVariables {
   @IsIn(['development', 'test', 'production'])
   NODE_ENV!: string;
 
+  /// Opt in to HTTP/NestJS OpenTelemetry spans. Off unless literally 'true'.
+  /// See docs/TRACING.md.
+  @IsIn(['true', 'false'])
+  @IsOptional()
+  OTEL_TRACING_ENABLED?: string;
+
+  /// Service name attached to exported spans; defaults to stellar-tickets-backend.
+  @IsString()
+  @IsOptional()
+  OTEL_SERVICE_NAME?: string;
+
+  /// OTLP HTTP trace collector URL. Defaults to http://localhost:4318/v1/traces.
+  @IsString()
+  @IsOptional()
+  OTEL_EXPORTER_OTLP_TRACES_ENDPOINT?: string;
+
   /// TCP port the HTTP server binds. Match it to the `port` in docker-compose.yml
   /// when running the API in a container.
   @IsInt()
