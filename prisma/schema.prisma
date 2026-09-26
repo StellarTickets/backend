@@ -225,6 +225,9 @@ model ResaleListing {
   priceHistory ResalePriceHistory[]
   createdAt    DateTime             @default(now())
   updatedAt    DateTime             @updatedAt
+
+  // #214 — resale lookups filter by ticket and status.
+  @@index([ticketId, status])
 }
 
 model ResalePriceHistory {

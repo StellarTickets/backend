@@ -221,4 +221,31 @@ describe('Resale flow (e2e)', () => {
     expect(ticketAfterBuy.ownerId).toBe(buyer.id);
     expect(ticketAfterBuy.status).toBe('VALID');
   });
+
+  it('does not allow two ACTIVE resale listings for the same ticket (#216)', async () => {
+    const { seller, ticket } = await seedTicket();
+    currentUser = { userId: seller.id, email: seller.email, role: seller.role };
+
+    // Two concurrent confirm-list-resale calls race the application-level
+    // pre-check; the DB partial unique index must let exactly one win.
+    const responses = await Promise.all(
+      Array.from({ length: 2 }, () =>
+        request(app.getHttpServer())
+          .post(`/v1/tickets/${ticket.id}/confirm-list-resale`)
+          .send({ price: '1100', signedXdr: 'signed-xdr' }),
+      ),
+    );
+
+    const succeeded = responses.filter((res) => res.status === 201);
+    const conflicted = responses.filter((res) => res.status === 409);
+
+    expect(succeeded).toHaveLength(1);
+    expect(conflicted).toHaveLength(1);
+    expect(conflicted[0].body.message).toMatch(/active resale listing/i);
+
+    const activeListings = await prisma.resaleListing.count({
+      where: { ticketId: ticket.id, status: 'ACTIVE' },
+    });
+    expect(activeListings).toBe(1);
+  });
 });

@@ -15,6 +15,7 @@ import {
   ListingInactiveError,
   TicketTypeSoldOutError,
 } from '../common/errors/domain.error';
+import { Prisma } from '@prisma/client';
 import { TicketsService } from './tickets.service';
 import type { PrismaService } from '../prisma/prisma.service';
 import type { OrganizationsService } from '../organizations/organizations.service';
@@ -53,6 +54,7 @@ function buildTicketType(overrides: Partial<Record<string, unknown>> = {}) {
 describe('TicketsService', () => {
   let service: TicketsService;
   let prisma: {
+    $queryRaw: jest.Mock;
     ticketType: { findUnique: jest.Mock; update: jest.Mock };
     ticket: {
       findUnique: jest.Mock;
@@ -69,6 +71,7 @@ describe('TicketsService', () => {
       findMany: jest.Mock;
       count: jest.Mock;
       findUnique: jest.Mock;
+      findFirst: jest.Mock;
       update: jest.Mock;
     };
     resalePriceHistory: {
@@ -85,6 +88,9 @@ describe('TicketsService', () => {
 
   beforeEach(() => {
     prisma = {
+      $queryRaw: jest
+        .fn()
+        .mockResolvedValue([{ quantityIssued: 0, quantityTotal: 100 }]),
       ticketType: { findUnique: jest.fn(), update: jest.fn() },
       ticket: {
         findUnique: jest.fn(),
@@ -101,6 +107,7 @@ describe('TicketsService', () => {
         findMany: jest.fn(),
         count: jest.fn().mockResolvedValue(0),
         findUnique: jest.fn(),
+        findFirst: jest.fn().mockResolvedValue(null),
         update: jest.fn(),
       },
       resalePriceHistory: {
@@ -250,6 +257,60 @@ describe('TicketsService', () => {
         ownerId: 'buyer-1',
         seat: 'A1',
       });
+    });
+
+    it('locks the TicketType row and re-checks capacity under the lock (#217)', async () => {
+      prisma.ticketType.findUnique.mockResolvedValue(buildTicketType());
+      prisma.user.findUnique.mockResolvedValue(
+        createUser({ id: 'buyer-1', stellarPublicKey: 'GBUYER' }),
+      );
+      prisma.ticketType.update.mockResolvedValue({});
+      prisma.ticket.create.mockResolvedValue(
+        createTicket({ id: 'ticket-new', ownerId: 'buyer-1' }),
+      );
+
+      await service.confirmIssue(
+        'organizer-1',
+        'tt-1',
+        'buyer-1',
+        'GBUYER',
+        undefined,
+        'signed-xdr',
+      );
+
+      // The row lock precedes the increment inside the same transaction.
+      expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
+      const [query] = prisma.$queryRaw.mock.calls[0];
+      expect(query[0]).toContain('FOR UPDATE');
+      expect(prisma.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
+        prisma.ticketType.update.mock.invocationCallOrder[0],
+      );
+    });
+
+    it('uses the locked row as the capacity authority, not the stale read (#217)', async () => {
+      prisma.ticketType.findUnique.mockResolvedValue(buildTicketType());
+      prisma.user.findUnique.mockResolvedValue(
+        createUser({ id: 'buyer-1', stellarPublicKey: 'GBUYER' }),
+      );
+      // The stale pre-transaction read said capacity was available, but the
+      // locked row shows a concurrent transaction already filled the tier.
+      prisma.$queryRaw.mockResolvedValueOnce([
+        { quantityIssued: 100, quantityTotal: 100 },
+      ]);
+
+      await expect(
+        service.confirmIssue(
+          'organizer-1',
+          'tt-1',
+          'buyer-1',
+          'GBUYER',
+          undefined,
+          'signed-xdr',
+        ),
+      ).rejects.toBeInstanceOf(TicketTypeSoldOutError);
+
+      expect(prisma.ticketType.update).not.toHaveBeenCalled();
+      expect(prisma.ticket.create).not.toHaveBeenCalled();
     });
 
     it('rejects a duplicate assigned seat for the same event (#211)', async () => {
@@ -487,6 +548,59 @@ describe('TicketsService', () => {
           },
         },
       });
+    });
+
+    it('rejects listing a ticket that already has an ACTIVE listing (#216)', async () => {
+      prisma.ticket.findUnique.mockResolvedValue({
+        id: 'ticket-1',
+        ownerId: 'owner-1',
+        chainTicketId: 7n,
+        event: {
+          organizationId: 'org-1',
+          organization: { stellarAccount: 'GORG' },
+          maxResaleMultiplierBps: 20_000,
+        },
+        ticketType: { price: 1_000n },
+      });
+      prisma.resaleListing.findFirst.mockResolvedValueOnce({ id: 'existing-listing' });
+
+      await expect(
+        service.confirmListForResale('owner-1', 'ticket-1', '1200', 'signed-xdr'),
+      ).rejects.toBeInstanceOf(ConflictException);
+
+      // Fail fast: the chain is never touched and no listing row is written.
+      expect(stellar.submitSignedTransaction).not.toHaveBeenCalled();
+      expect(prisma.resaleListing.create).not.toHaveBeenCalled();
+    });
+
+    it('maps the DB unique-index violation to 409 when a concurrent create wins (#216)', async () => {
+      prisma.ticket.findUnique.mockResolvedValue({
+        id: 'ticket-1',
+        ownerId: 'owner-1',
+        chainTicketId: 7n,
+        event: {
+          organizationId: 'org-1',
+          organization: { stellarAccount: 'GORG' },
+          maxResaleMultiplierBps: 20_000,
+        },
+        ticketType: { price: 1_000n },
+      });
+      // Both transactions race past the pre-check; the DB partial unique
+      // index rejects the loser with a P2002 on the active-listing index.
+      prisma.$transaction.mockRejectedValueOnce(
+        new Prisma.PrismaClientKnownRequestError(
+          'Unique constraint failed',
+          {
+            code: 'P2002',
+            clientVersion: 'test',
+            meta: { target: ['ticketId', 'ResaleListing_ticketId_active_key'] },
+          },
+        ),
+      );
+
+      await expect(
+        service.confirmListForResale('owner-1', 'ticket-1', '1200', 'signed-xdr'),
+      ).rejects.toBeInstanceOf(ConflictException);
     });
 
     it('enforces soft limit on active resale listings per user (409 Conflict)', async () => {
