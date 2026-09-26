@@ -38,9 +38,15 @@ export class OrganizationsService {
     });
 
     // #209 — audit org creation (best-effort, never blocks the response).
-    await this.audit?.record(userId, 'organization.create', 'Organization', org.id, {
-      slug: org.slug,
-    });
+    await this.audit?.record(
+      userId,
+      'organization.create',
+      'Organization',
+      org.id,
+      {
+        slug: org.slug,
+      },
+    );
     return org;
   }
 
@@ -84,7 +90,12 @@ export class OrganizationsService {
       where: { id },
       data: { deletedAt: null },
     });
-    await this.audit?.record(userId, 'organization.restore', 'Organization', id);
+    await this.audit?.record(
+      userId,
+      'organization.restore',
+      'Organization',
+      id,
+    );
     return restored;
   }
 

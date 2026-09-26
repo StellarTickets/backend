@@ -105,7 +105,7 @@ describe('OrganizationsService', () => {
   describe('soft-delete (#207)', () => {
     it('soft-deletes by setting deletedAt instead of hard-deleting', async () => {
       prisma.organization.findUnique.mockResolvedValue(
-        createOrganization({ id: 'org-1', deletedAt: null } as never),
+        createOrganization({ id: 'org-1', deletedAt: null }),
       );
       prisma.organizationMember.findUnique.mockResolvedValue({
         id: 'membership-1',

@@ -86,10 +86,11 @@ class EnvironmentVariables {
   @MinLength(32)
   JWT_SECRET!: string;
 
-  /// Public origin this API is reached at, e.g. http://localhost:3001. Used
-  /// as the CORS allow-list and to build links in outbound email/webhooks.
+  /// Comma-separated list of allowed CORS origins (e.g. "https://app.example.com,https://staging.example.com").
+  /// Wildcard (*) is NOT allowed in production. Used as the CORS allow-list
+  /// and to build links in outbound email/webhooks.
   @IsString()
-  APP_URL!: string;
+  CORS_ORIGINS!: string;
 
   /// Soroban RPC endpoint the StellarService submits contract calls through.
   @IsString()
@@ -152,6 +153,11 @@ export function validate(config: Record<string, unknown>) {
 
   if (errors.length > 0) {
     throw new Error(`Invalid environment configuration: ${errors.toString()}`);
+  }
+
+  const corsOrigins = validated.CORS_ORIGINS.split(',').map((o) => o.trim());
+  if (validated.NODE_ENV === 'production' && corsOrigins.includes('*')) {
+    throw new Error('CORS_ORIGINS wildcard (*) is not allowed in production');
   }
 
   return validated;

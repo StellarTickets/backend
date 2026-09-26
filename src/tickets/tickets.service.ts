@@ -914,7 +914,9 @@ export class TicketsService {
       err.code === 'P2002'
     ) {
       const target = (err.meta as { target?: unknown } | undefined)?.target;
-      const targets = Array.isArray(target) ? target.join(',') : String(target ?? '');
+      const targets = Array.isArray(target)
+        ? target.join(',')
+        : String(target ?? '');
       if (targets.includes('seat') || targets.includes('Ticket_eventId_seat')) {
         throw new ConflictException(
           'That seat has already been issued for this event',
@@ -948,7 +950,9 @@ export class TicketsService {
       err.code === 'P2002'
     ) {
       const target = (err.meta as { target?: unknown } | undefined)?.target;
-      const targets = Array.isArray(target) ? target.join(',') : String(target ?? '');
+      const targets = Array.isArray(target)
+        ? target.join(',')
+        : String(target ?? '');
       if (targets.includes('ResaleListing_ticketId_active')) {
         throw new ConflictException(
           'This ticket already has an active resale listing',

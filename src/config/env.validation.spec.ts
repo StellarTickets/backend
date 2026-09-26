@@ -7,7 +7,7 @@ function validConfig(overrides: Record<string, unknown> = {}) {
     PORT: 3000,
     DATABASE_URL: 'postgresql://user:pass@localhost:5432/db',
     JWT_SECRET: 'x'.repeat(32),
-    APP_URL: 'http://localhost:3001',
+    CORS_ORIGINS: 'http://localhost:3001,https://staging.example.com',
     SOROBAN_RPC_URL: 'https://soroban-testnet.stellar.org',
     STELLAR_NETWORK: 'testnet',
     TICKETING_CONTRACT_ID: 'C'.repeat(56),
@@ -154,5 +154,56 @@ describe('env.validate', () => {
     const config = validConfig();
     delete (config as Record<string, unknown>).DATABASE_URL;
     expect(() => validate(config)).toThrow();
+  });
+
+  describe('CORS_ORIGINS', () => {
+    it('accepts comma-separated origins', () => {
+      expect(() =>
+        validate(
+          validConfig({
+            CORS_ORIGINS: 'https://app.example.com,https://staging.example.com',
+          }),
+        ),
+      ).not.toThrow();
+    });
+
+    it('accepts single origin', () => {
+      expect(() =>
+        validate(validConfig({ CORS_ORIGINS: 'https://app.example.com' })),
+      ).not.toThrow();
+    });
+
+    it('rejects wildcard in production', () => {
+      expect(() =>
+        validate(
+          validConfig({
+            NODE_ENV: 'production',
+            CORS_ORIGINS: '*',
+          }),
+        ),
+      ).toThrow('wildcard (*) is not allowed in production');
+    });
+
+    it('accepts wildcard in development', () => {
+      expect(() =>
+        validate(
+          validConfig({
+            NODE_ENV: 'development',
+            CORS_ORIGINS: '*',
+          }),
+        ),
+      ).not.toThrow();
+    });
+
+    it('accepts wildcard in test', () => {
+      expect(() =>
+        validate(
+          validConfig({
+            NODE_ENV: 'test',
+            CORS_ORIGINS: '*',
+          }),
+        ),
+      ).not.toThrow();
+    });
   });
 });

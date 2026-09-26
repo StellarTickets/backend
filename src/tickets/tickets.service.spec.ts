@@ -346,7 +346,7 @@ describe('TicketsService', () => {
           organizationId: 'org-1',
           organization: createOrganization({ stellarAccount: 'GORG' }),
         },
-      } as never);
+      });
 
       await expect(
         service.buildTransferTx(
@@ -369,7 +369,7 @@ describe('TicketsService', () => {
           organizationId: 'org-1',
           organization: createOrganization({ stellarAccount: 'GORG' }),
         },
-      } as never);
+      });
       prisma.user.findUnique
         .mockResolvedValueOnce(
           createUser({ id: 'owner-1', stellarPublicKey: 'GOWNER' }),
@@ -562,10 +562,17 @@ describe('TicketsService', () => {
         },
         ticketType: { price: 1_000n },
       });
-      prisma.resaleListing.findFirst.mockResolvedValueOnce({ id: 'existing-listing' });
+      prisma.resaleListing.findFirst.mockResolvedValueOnce({
+        id: 'existing-listing',
+      });
 
       await expect(
-        service.confirmListForResale('owner-1', 'ticket-1', '1200', 'signed-xdr'),
+        service.confirmListForResale(
+          'owner-1',
+          'ticket-1',
+          '1200',
+          'signed-xdr',
+        ),
       ).rejects.toBeInstanceOf(ConflictException);
 
       // Fail fast: the chain is never touched and no listing row is written.
@@ -588,18 +595,20 @@ describe('TicketsService', () => {
       // Both transactions race past the pre-check; the DB partial unique
       // index rejects the loser with a P2002 on the active-listing index.
       prisma.$transaction.mockRejectedValueOnce(
-        new Prisma.PrismaClientKnownRequestError(
-          'Unique constraint failed',
-          {
-            code: 'P2002',
-            clientVersion: 'test',
-            meta: { target: ['ticketId', 'ResaleListing_ticketId_active_key'] },
-          },
-        ),
+        new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
+          code: 'P2002',
+          clientVersion: 'test',
+          meta: { target: ['ticketId', 'ResaleListing_ticketId_active_key'] },
+        }),
       );
 
       await expect(
-        service.confirmListForResale('owner-1', 'ticket-1', '1200', 'signed-xdr'),
+        service.confirmListForResale(
+          'owner-1',
+          'ticket-1',
+          '1200',
+          'signed-xdr',
+        ),
       ).rejects.toBeInstanceOf(ConflictException);
     });
 
@@ -802,7 +811,7 @@ describe('TicketsService', () => {
     it('filters by status when provided, using the (ownerId, status) index (#213)', async () => {
       prisma.ticket.findMany.mockResolvedValue([]);
 
-      await service.findMine('owner-1', 'VALID' as never);
+      await service.findMine('owner-1', 'VALID');
 
       expect(prisma.ticket.findMany).toHaveBeenCalledWith(
         expect.objectContaining({

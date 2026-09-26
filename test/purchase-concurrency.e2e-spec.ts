@@ -1,5 +1,9 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { INestApplication, ValidationPipe, VersioningType } from '@nestjs/common';
+import {
+  INestApplication,
+  ValidationPipe,
+  VersioningType,
+} from '@nestjs/common';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { randomUUID } from 'node:crypto';
@@ -31,7 +35,9 @@ describe('Ticket purchase concurrency (e2e, #217)', () => {
   let userIndex: Map<string, User>;
 
   const mockStellarService = {
-    buildPurchasePrimaryTx: jest.fn().mockResolvedValue('unsigned-purchase-xdr'),
+    buildPurchasePrimaryTx: jest
+      .fn()
+      .mockResolvedValue('unsigned-purchase-xdr'),
     submitSignedTransaction: jest.fn().mockImplementation(() =>
       Promise.resolve({
         result: BigInt(Math.floor(Math.random() * 1_000_000) + 1),
