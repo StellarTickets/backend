@@ -1,5 +1,7 @@
 # StellarTickets — Backend
 
+[![CI](https://github.com/StellarTickets/backend/actions/workflows/ci.yml/badge.svg)](https://github.com/StellarTickets/backend/actions/workflows/ci.yml)
+
 REST API for [StellarTickets](https://github.com/StellarTickets) —
 *Secure. Verifiable. Powered by Stellar.*
 
@@ -216,7 +218,22 @@ npm install
 cp .env.example .env   # fill in DATABASE_URL, JWT_SECRET, Soroban RPC config
 
 npx prisma migrate dev   # creates the database schema
+npm run db:seed          # optional: populate demo users, org, event & ticket types
 npm run start:dev        # http://localhost:3000, hot-reloading
+```
+
+The seed script (`prisma/seed.ts`) is idempotent — running it more than once
+is safe. It creates:
+
+- **alice@example.com** (attendee) and **organiser@example.com** (organiser),
+  both with password `Password123!`
+- A demo organisation **Stellar Events Demo**
+- A draft event **StellarFest 2027** with General Admission and VIP ticket types
+
+Seed data can be wiped and recreated with:
+
+```bash
+npm run db:reset   # drops all tables, re-applies migrations, then seeds
 ```
 
 Or with Docker (brings up Postgres only, for use with `npm run start:dev` on
