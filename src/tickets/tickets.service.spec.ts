@@ -56,6 +56,7 @@ describe('TicketsService', () => {
     ticketType: { findUnique: jest.Mock; update: jest.Mock };
     ticket: {
       findUnique: jest.Mock;
+      findFirst: jest.Mock;
       update: jest.Mock;
       create: jest.Mock;
       findMany: jest.Mock;
@@ -87,6 +88,7 @@ describe('TicketsService', () => {
       ticketType: { findUnique: jest.fn(), update: jest.fn() },
       ticket: {
         findUnique: jest.fn(),
+        findFirst: jest.fn().mockResolvedValue(null),
         update: jest.fn(),
         create: jest.fn(),
         findMany: jest.fn(),
@@ -248,6 +250,26 @@ describe('TicketsService', () => {
         ownerId: 'buyer-1',
         seat: 'A1',
       });
+    });
+
+    it('rejects a duplicate assigned seat for the same event (#211)', async () => {
+      prisma.ticketType.findUnique.mockResolvedValue(buildTicketType());
+      prisma.ticket.findFirst.mockResolvedValueOnce({ id: 'existing-ticket' });
+      prisma.user.findUnique.mockResolvedValue(
+        createUser({ id: 'buyer-1', stellarPublicKey: 'GBUYER' }),
+      );
+
+      await expect(
+        service.confirmIssue(
+          'organizer-1',
+          'tt-1',
+          'buyer-1',
+          'GBUYER',
+          'A1',
+          'signed-xdr',
+        ),
+      ).rejects.toBeInstanceOf(ConflictException);
+      expect(stellar.submitSignedTransaction).not.toHaveBeenCalled();
     });
   });
 
@@ -660,6 +682,18 @@ describe('TicketsService', () => {
 
       expect(prisma.ticket.findMany).toHaveBeenCalledWith(
         expect.objectContaining({ where: { ownerId: 'owner-1' } }),
+      );
+    });
+
+    it('filters by status when provided, using the (ownerId, status) index (#213)', async () => {
+      prisma.ticket.findMany.mockResolvedValue([]);
+
+      await service.findMine('owner-1', 'VALID' as never);
+
+      expect(prisma.ticket.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { ownerId: 'owner-1', status: 'VALID' },
+        }),
       );
     });
   });

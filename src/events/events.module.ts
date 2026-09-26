@@ -1,12 +1,13 @@
 import { Module } from '@nestjs/common';
 import { OrganizationsModule } from '../organizations/organizations.module';
 import { StellarModule } from '../stellar/stellar.module';
+import { AuditModule } from '../audit/audit.module';
 import { EventsController } from './events.controller';
 import { EventsService } from './events.service';
 import { EventReminderService } from './event-reminder.service';
 
 @Module({
-  imports: [OrganizationsModule, StellarModule],
+  imports: [OrganizationsModule, StellarModule, AuditModule],
   controllers: [EventsController],
   providers: [EventsService, EventReminderService],
   exports: [EventsService, EventReminderService],

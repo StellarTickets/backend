@@ -42,6 +42,8 @@ export class EventReminderService implements OnModuleInit {
     const upcomingEvents = await this.prisma.event.findMany({
       where: {
         status: EventStatus.PUBLISHED,
+        // #207 — never remind for soft-deleted events.
+        deletedAt: null,
         startsAt: {
           gte: now,
           lte: targetWindow,
