@@ -2,6 +2,49 @@
 
 Postgres via Prisma. Schema: [`prisma/schema.prisma`](../prisma/schema.prisma).
 
+## Connection pool configuration (#215)
+
+Prisma maintains a Postgres connection pool per `PrismaClient` instance,
+sized by **query engine defaults** unless the `DATABASE_URL` overrides it:
+
+| Param             | Default                      | Meaning                                        |
+| ----------------- | ---------------------------- | ---------------------------------------------- |
+| `connection_limit`| `num_cpus * 2 + 1`           | Max pool size (physical connections)           |
+| `pool_timeout`    | `10` seconds                 | How long a query waits for a free connection   |
+| `connect_timeout` | `5` seconds                  | TCP connect handshake timeout                  |
+
+Because the default scales with the **host's** CPU count, it is wrong on
+container platforms where `num_cpus` is the node's, not the container's —
+set `connection_limit` explicitly everywhere except tiny local setups:
+
+```
+DATABASE_URL="postgresql://user:pass@host:5432/db?connection_limit=10&pool_timeout=10&connect_timeout=5"
+```
+
+### Guidance by environment
+
+| Environment                        | Suggested `connection_limit` | Why |
+| ---------------------------------- | ---------------------------- | --- |
+| Local dev / `docker-compose.yml`   | `5` (or omit)                | One developer, default engine sizing is fine |
+| API pods on Kubernetes             | `5–10` per pod               | `pods * limit` must stay below Postgres `max_connections` minus superuser/system reserve (~10%) |
+| Migration / one-off CLI runs       | `2`                          | Migrations don't need a large pool |
+| Serverless / Vercel functions      | `1` **and** a pooled proxy (PgBouncer in transaction mode or Supabase/Neon pooled URL on port 6543) | Many ephemeral runtimes × per-runtime pools exhaust the database instantly |
+
+Rules of thumb:
+
+- **Budget first:** `sum(connection_limit across all deployable processes)
+  ≤ max_connections - reserve`. Check `SHOW max_connections;` and every
+  deployment's replica count before raising limits.
+- **Watch for pool timeouts:** `P2024` ("Timed out fetching a connection
+  from the pool") means queries are holding connections too long (long
+  interactive transactions) or the pool is undersized — prefer shrinking
+  transaction scopes (see #217) before raising the limit.
+- **One pool per process, not per request:** the `PrismaService` singleton
+  already guarantees this; never construct `PrismaClient` inside request
+  handlers.
+- Postgres reserves superuser slots, so keep the total well under
+  `max_connections` (default `100`) — roughly 80% as a ceiling.
+
 ## Key relationships
 
 - `User` — `OrganizationMember` (many-to-many via join table) — `Organization`
