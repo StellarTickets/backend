@@ -62,6 +62,67 @@ Migration: `prisma/migrations/20260926100000_ticket_owner_status_index/`.
 Supports `WHERE "ownerId" = $1 [AND "status" = $2] ORDER BY "createdAt" DESC`
 as a single index scan.
 
+## Resale ticket/status index (#214)
+
+Resale lookups filter listings by ticket and status — active listing per
+ticket, ticket-scoped feeds, and expiry sweeps all issue:
+
+```sql
+WHERE "ticketId" = $1 [AND "status" = $2]
+```
+
+Covered by a composite index declared in the schema and migration:
+
+```prisma
+@@index([ticketId, status]) // on ResaleListing
+```
+
+```sql
+CREATE INDEX "ResaleListing_ticketId_status_idx"
+  ON "ResaleListing"("ticketId", "status");
+```
+
+Migration: `prisma/migrations/20260926130000_resale_ticket_status_index/`.
+
+## One ACTIVE resale listing per ticket (#216)
+
+Nothing else stops two `ACTIVE` `ResaleListing` rows for the same ticket.
+Enforced by a **partial** unique index (raw SQL — Prisma cannot express
+`WHERE`):
+
+```sql
+CREATE UNIQUE INDEX "ResaleListing_ticketId_active_key"
+  ON "ResaleListing"("ticketId")
+  WHERE "status" = 'ACTIVE';
+```
+
+- Concurrent `confirmListForResale` calls for the same ticket cannot both
+  succeed: the loser gets a `P2002` that `TicketsService` translates to
+  `409 Conflict`.
+- Non-`ACTIVE` rows (`SOLD`, `CANCELLED`) are excluded, so a ticket can be
+  re-listed after its listing is sold or cancelled while the historical
+  listing rows stay intact.
+- Migration: `prisma/migrations/20260926140000_resale_listing_active_partial_unique/`.
+- Tested against the schema: two concurrent ACTIVE creates — exactly one
+  succeeds, the other maps to `409 Conflict`.
+
+## Purchase concurrency & row-level locking (#217)
+
+`quantityIssued` increments (`confirmIssue`, `confirmPurchase`) run inside
+the same interactive transaction as the ticket insert, guarded by a
+row-level lock:
+
+```sql
+SELECT "quantityIssued", "quantityTotal" FROM "TicketType" WHERE "id" = $1 FOR UPDATE
+```
+
+Concurrent transactions serialize on the `TicketType` row; each one
+re-checks `quantityIssued < quantityTotal` **after** acquiring the lock, so
+overselling `quantityTotal` is impossible even when the pre-transaction
+capacity check raced. Losing transactions abort with
+`TICKET_TYPE_SOLD_OUT` (`409` via the domain exception filter).
+
+
 ## Soft-delete for Event and Organization (#207)
 
 `Event.deletedAt` and `Organization.deletedAt` (`NULL` = live) replace
