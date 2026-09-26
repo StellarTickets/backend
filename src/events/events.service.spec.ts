@@ -8,6 +8,7 @@ import { EventsService } from './events.service';
 import type { PrismaService } from '../prisma/prisma.service';
 import type { OrganizationsService } from '../organizations/organizations.service';
 import type { StellarService } from '../stellar/stellar.service';
+import { createEvent, createOrganization } from '../../test/factories';
 
 describe('EventsService', () => {
   let service: EventsService;
@@ -63,12 +64,14 @@ describe('EventsService', () => {
   describe('buildPublishTx', () => {
     it('refuses to publish an already-published event', async () => {
       prisma.event.findUnique.mockResolvedValue({
-        id: 'event-1',
-        organizationId: 'org-1',
-        status: 'PUBLISHED',
-        chainEventId: null,
-        organization: { stellarAccount: 'GORG' },
-      });
+        ...createEvent({
+          id: 'event-1',
+          organizationId: 'org-1',
+          status: 'PUBLISHED',
+          chainEventId: null,
+        }),
+        organization: createOrganization({ stellarAccount: 'GORG' }),
+      } as never);
 
       await expect(
         service.buildPublishTx('organizer-1', 'event-1'),
@@ -78,12 +81,14 @@ describe('EventsService', () => {
 
     it('refuses to re-publish an event that already reserved an on-chain id', async () => {
       prisma.event.findUnique.mockResolvedValue({
-        id: 'event-1',
-        organizationId: 'org-1',
-        status: 'DRAFT',
-        chainEventId: 99n,
-        organization: { stellarAccount: 'GORG' },
-      });
+        ...createEvent({
+          id: 'event-1',
+          organizationId: 'org-1',
+          status: 'DRAFT',
+          chainEventId: 99n,
+        }),
+        organization: createOrganization({ stellarAccount: 'GORG' }),
+      } as never);
 
       await expect(
         service.buildPublishTx('organizer-1', 'event-1'),
@@ -92,12 +97,14 @@ describe('EventsService', () => {
 
     it('returns conflict when the event has no ticket types to sell', async () => {
       prisma.event.findUnique.mockResolvedValue({
-        id: 'event-1',
-        organizationId: 'org-1',
-        status: 'DRAFT',
-        chainEventId: null,
-        organization: { stellarAccount: 'GORG' },
-      });
+        ...createEvent({
+          id: 'event-1',
+          organizationId: 'org-1',
+          status: 'DRAFT',
+          chainEventId: null,
+        }),
+        organization: createOrganization({ stellarAccount: 'GORG' }),
+      } as never);
       prisma.ticketType.count.mockResolvedValue(0);
 
       const attempt = service.buildPublishTx('organizer-1', 'event-1');
@@ -113,16 +120,18 @@ describe('EventsService', () => {
 
     it('reserves a chain event id and builds create_event against the org account', async () => {
       prisma.event.findUnique.mockResolvedValue({
-        id: 'event-1',
-        organizationId: 'org-1',
-        status: 'DRAFT',
-        chainEventId: null,
-        name: 'Radiohead Live',
-        category: 'CONCERTS',
-        maxResaleMultiplierBps: 12_000,
-        royaltyBps: 500,
-        organization: { stellarAccount: 'GORG' },
-      });
+        ...createEvent({
+          id: 'event-1',
+          organizationId: 'org-1',
+          status: 'DRAFT',
+          chainEventId: null,
+          name: 'Radiohead Live',
+          category: 'CONCERTS',
+          maxResaleMultiplierBps: 12_000,
+          royaltyBps: 500,
+        }),
+        organization: createOrganization({ stellarAccount: 'GORG' }),
+      } as never);
       prisma.event.update.mockResolvedValue({});
 
       const { unsignedXdr } = await service.buildPublishTx(
@@ -150,11 +159,13 @@ describe('EventsService', () => {
   describe('confirmPublish', () => {
     it('requires publish to have been called first', async () => {
       prisma.event.findUnique.mockResolvedValue({
-        id: 'event-1',
-        organizationId: 'org-1',
-        chainEventId: null,
-        organization: { stellarAccount: 'GORG' },
-      });
+        ...createEvent({
+          id: 'event-1',
+          organizationId: 'org-1',
+          chainEventId: null,
+        }),
+        organization: createOrganization({ stellarAccount: 'GORG' }),
+      } as never);
 
       await expect(
         service.confirmPublish('organizer-1', 'event-1', 'signed-xdr'),
@@ -163,11 +174,13 @@ describe('EventsService', () => {
 
     it('rejects a confirmed transaction whose on-chain event does not match', async () => {
       prisma.event.findUnique.mockResolvedValue({
-        id: 'event-1',
-        organizationId: 'org-1',
-        chainEventId: 99n,
-        organization: { stellarAccount: 'GORG' },
-      });
+        ...createEvent({
+          id: 'event-1',
+          organizationId: 'org-1',
+          chainEventId: 99n,
+        }),
+        organization: createOrganization({ stellarAccount: 'GORG' }),
+      } as never);
       stellar.getEvent.mockResolvedValue({
         eventId: 100n,
         organizer: 'GOTHER',
@@ -181,15 +194,16 @@ describe('EventsService', () => {
 
     it('submits the signed transaction and marks the event published', async () => {
       prisma.event.findUnique.mockResolvedValue({
-        id: 'event-1',
-        organizationId: 'org-1',
-        chainEventId: 99n,
-        organization: { stellarAccount: 'GORG' },
-      });
-      prisma.event.update.mockResolvedValue({
-        id: 'event-1',
-        status: 'PUBLISHED',
-      });
+        ...createEvent({
+          id: 'event-1',
+          organizationId: 'org-1',
+          chainEventId: 99n,
+        }),
+        organization: createOrganization({ stellarAccount: 'GORG' }),
+      } as never);
+      prisma.event.update.mockResolvedValue(
+        createEvent({ id: 'event-1', status: 'PUBLISHED' }),
+      );
 
       const event = await service.confirmPublish(
         'organizer-1',
@@ -212,13 +226,17 @@ describe('EventsService', () => {
   describe('unpublish', () => {
     it('reverts a published event to draft when no tickets exist', async () => {
       prisma.event.findUnique.mockResolvedValue({
-        id: 'event-1',
-        organizationId: 'org-1',
-        status: 'PUBLISHED',
-        organization: { stellarAccount: 'GORG' },
-      });
+        ...createEvent({
+          id: 'event-1',
+          organizationId: 'org-1',
+          status: 'PUBLISHED',
+        }),
+        organization: createOrganization({ stellarAccount: 'GORG' }),
+      } as never);
       prisma.ticket.count.mockResolvedValue(0);
-      prisma.event.update.mockResolvedValue({ id: 'event-1', status: 'DRAFT' });
+      prisma.event.update.mockResolvedValue(
+        createEvent({ id: 'event-1', status: 'DRAFT' }),
+      );
 
       const event = await service.unpublish('organizer-1', 'event-1');
 

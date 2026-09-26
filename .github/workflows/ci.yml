@@ -31,8 +31,8 @@ jobs:
       - name: Audit dependencies
         run: npm run audit:check
 
-      - name: Unit tests
-        run: npm test
+      - name: Unit tests (with coverage gate)
+        run: npm run test:cov
 
       - name: Build
         run: npm run build
