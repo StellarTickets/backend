@@ -89,6 +89,7 @@ model User {
   eventReminders   EventReminder[]
   waitlistEntries  WaitlistEntry[]
   promoRedemptions PromoCodeRedemption[]
+  auditLogs        AuditLog[]
   createdAt        DateTime             @default(now())
   updatedAt        DateTime             @updatedAt
 }
@@ -106,6 +107,9 @@ model Organization {
   members        OrganizationMember[]
   events         Event[]
   webhookEndpoints WebhookEndpoint[]
+  /// #207 — soft-delete marker. Null = live; non-null = deleted at that time.
+  /// Rows are never hard-deleted by the app; queries filter `deletedAt: null`.
+  deletedAt      DateTime?
   createdAt      DateTime             @default(now())
   updatedAt      DateTime             @updatedAt
 }
@@ -144,6 +148,8 @@ model Event {
   promoCodes             PromoCode[]
   gates                  Gate[]
   scannerDevices         ScannerDevice[]
+  /// #207 — soft-delete marker. Null = live; non-null = deleted at that time.
+  deletedAt              DateTime?
   createdAt              DateTime        @default(now())
   updatedAt              DateTime        @updatedAt
 }
@@ -196,6 +202,14 @@ model Ticket {
   promoRedemption PromoCodeRedemption?
   createdAt      DateTime        @default(now())
   updatedAt      DateTime        @updatedAt
+
+  // #213 — covers GET /tickets/mine (owner + optional status filter).
+  @@index([ownerId, status])
+  // #211 — seat uniqueness for assigned seats is enforced by a partial
+  // unique index in a raw migration (see prisma/migrations/*_ticket_seat_partial_unique/migration.sql):
+  // CREATE UNIQUE INDEX "Ticket_eventId_seat_key" ON "Ticket"("eventId", "seat")
+  // WHERE "seat" <> 'unassigned'.
+  // Prisma cannot express partial indexes, so no @@unique here by design.
 }
 
 model ResaleListing {
@@ -337,4 +351,24 @@ model WebhookEndpoint {
   updatedAt      DateTime     @updatedAt
 
   @@index([organizationId])
+}
+
+/// #209 — audit trail for sensitive actions (org/event writes, ticket revokes).
+/// Actor, action, entity and timestamp are stored; `metadata` carries
+/// optional context (e.g. ticket ids, previous status).
+model AuditLog {
+  id         String   @id @default(uuid())
+  /// User who performed the action. Null for system/cron actors.
+  actorId    String?
+  actor      User?    @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  action     String
+  /// E.g. "Organization", "Event", "Ticket".
+  entityType String
+  entityId   String
+  metadata   Json?
+  createdAt  DateTime @default(now())
+
+  @@index([actorId])
+  @@index([entityType, entityId])
+  @@index([createdAt])
 }

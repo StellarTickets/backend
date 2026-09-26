@@ -290,7 +290,7 @@ describe('EventsService', () => {
       );
       expect(prisma.event.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: { organizationId: 'org-1' },
+          where: { organizationId: 'org-1', deletedAt: null },
           skip: 0,
           take: 20,
         }),
@@ -312,7 +312,7 @@ describe('EventsService', () => {
 
       expect(prisma.event.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: { organizationId: 'org-1', status: 'PUBLISHED' },
+          where: { organizationId: 'org-1', deletedAt: null, status: 'PUBLISHED' },
         }),
       );
     });
@@ -341,7 +341,7 @@ describe('EventsService', () => {
       });
 
       expect(prisma.event.count).toHaveBeenCalledWith({
-        where: { organizationId: 'org-1', status: 'DRAFT' },
+        where: { organizationId: 'org-1', deletedAt: null, status: 'DRAFT' },
       });
       expect(page.total).toBe(45);
       expect(page.items).toHaveLength(1);
@@ -357,6 +357,70 @@ describe('EventsService', () => {
           orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         }),
       );
+    });
+
+    it('excludes soft-deleted events from organization listings (#207)', async () => {
+      prisma.event.findMany.mockResolvedValue([]);
+      prisma.event.count.mockResolvedValue(0);
+
+      await service.findForOrganization('organizer-1', 'org-1');
+
+      expect(prisma.event.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ deletedAt: null }),
+        }),
+      );
+      expect(prisma.event.count).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ deletedAt: null }),
+        }),
+      );
+    });
+  });
+
+  describe('soft-delete (#207)', () => {
+    it('treats a soft-deleted event as not found', async () => {
+      prisma.event.findUnique.mockResolvedValue({
+        ...createEvent({ id: 'event-1', organizationId: 'org-1' }),
+        deletedAt: new Date('2026-09-26T00:00:00.000Z'),
+        organization: createOrganization({ stellarAccount: 'GORG' }),
+      } as never);
+
+      await expect(service.getWithOrg('event-1')).rejects.toMatchObject({
+        status: 404,
+      });
+    });
+
+    it('soft-deletes by setting deletedAt instead of hard-deleting', async () => {
+      prisma.event.findUnique.mockResolvedValue({
+        ...createEvent({ id: 'event-1', organizationId: 'org-1' }),
+        deletedAt: null,
+        organization: createOrganization({ stellarAccount: 'GORG' }),
+      } as never);
+      prisma.event.update.mockResolvedValue({ id: 'event-1' });
+
+      await service.softDelete('organizer-1', 'event-1');
+
+      expect(prisma.event.update).toHaveBeenCalledWith({
+        where: { id: 'event-1' },
+        data: { deletedAt: expect.any(Date) },
+      });
+    });
+
+    it('restores a soft-deleted event by clearing deletedAt', async () => {
+      prisma.event.findUnique.mockResolvedValue({
+        ...createEvent({ id: 'event-1', organizationId: 'org-1' }),
+        deletedAt: new Date('2026-09-26T00:00:00.000Z'),
+        organization: createOrganization({ stellarAccount: 'GORG' }),
+      } as never);
+      prisma.event.update.mockResolvedValue({ id: 'event-1' });
+
+      await service.restore('organizer-1', 'event-1');
+
+      expect(prisma.event.update).toHaveBeenCalledWith({
+        where: { id: 'event-1' },
+        data: { deletedAt: null },
+      });
     });
   });
 });

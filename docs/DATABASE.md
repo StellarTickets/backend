@@ -21,6 +21,86 @@ npx prisma migrate deploy   # production
 1:1 to the on-chain `u64` ids — see `docs/ARCHITECTURE.md` for why the
 chain remains the source of truth despite this cache.
 
+## Seat uniqueness per event (#211)
+
+A seat may be issued only once per event. Enforced by a **partial**
+unique index (raw SQL — Prisma cannot express `WHERE`):
+
+```sql
+CREATE UNIQUE INDEX "Ticket_eventId_seat_partial_key"
+  ON "Ticket"("eventId", "seat")
+  WHERE "seat" <> 'unassigned';
+```
+
+- `seat = 'unassigned'` (the default) is excluded, so general-admission
+  tickets never collide.
+- Any assigned seat (e.g. `A1`) collides on duplicate `(eventId, seat)`
+  with a `P2002` that `TicketsService` translates to `409 Conflict`.
+- Migration: `prisma/migrations/20260926090000_ticket_seat_partial_unique/`.
+  Tested against the schema: duplicate assigned seats fail, repeated
+  `'unassigned'` rows succeed.
+
+## Ticket owner/status index (#213)
+
+`GET /tickets/mine` filters by owner with an optional `?status=` filter:
+
+```
+GET /tickets/mine?status=VALID
+```
+
+Covered by a composite index declared in the schema and migration:
+
+```prisma
+@@index([ownerId, status]) // on Ticket
+```
+
+```sql
+CREATE INDEX "Ticket_ownerId_status_idx" ON "Ticket"("ownerId", "status");
+```
+
+Migration: `prisma/migrations/20260926100000_ticket_owner_status_index/`.
+Supports `WHERE "ownerId" = $1 [AND "status" = $2] ORDER BY "createdAt" DESC`
+as a single index scan.
+
+## Soft-delete for Event and Organization (#207)
+
+`Event.deletedAt` and `Organization.deletedAt` (`NULL` = live) replace
+hard deletes in all app write paths (`DELETE /events/:eventId`,
+`DELETE /organizations/:id`, plus `POST .../restore` to undo).
+
+- All read paths filter `deletedAt: null` (`findMine`, `findOne`,
+  `getWithOrg`, `findPublished`, `findForOrganization`, reminders).
+  Single-row lookups treat a soft-deleted row as `404 Not Found`.
+- **Cascade behaviour:** the FK `ON DELETE CASCADE` rules
+  (`Organization -> Event -> TicketType -> Ticket`) are unchanged and
+  still apply to *hard* deletes (manual ops, `migrate reset`). A
+  soft-delete does **not** cascade at the DB level and does **not**
+  delete child rows: tickets, gates, promo codes and reminders of a
+  soft-deleted event/org remain in place for audit/reconciliation but
+  are hidden wherever their parent is filtered out (`findPublished`
+  additionally requires `organization.deletedAt IS NULL`).
+- Migration: `prisma/migrations/20260926110000_soft_delete_event_organization/`.
+
+## Audit log (#209)
+
+`AuditLog` (`prisma/migrations/20260926120000_audit_log/`) stores
+**actor, action, entity and timestamp** for sensitive actions:
+
+| Column | Meaning |
+| --- | --- |
+| `actorId` | `User.id` of the caller (`NULL` for system/cron) |
+| `action` | e.g. `organization.create`, `event.publish`, `ticket.revoke` |
+| `entityType` | e.g. `Organization`, `Event`, `Ticket` |
+| `entityId` | id of the affected row |
+| `metadata` | optional JSON context (slug, txHash, ticketIds, …) |
+| `createdAt` | timestamp (default `now()`) |
+
+Written (best-effort, never fails the primary write) by
+`AuditService` (`src/audit/`) for org actions
+(`organization.create/delete/restore`), event actions
+(`event.create/publish/unpublish/delete/restore`) and revoke actions
+(`ticket.revoke`, `ticket.revoke_batch`).
+
 ## BigInt Serialization Strategy
 
 Native JavaScript `BigInt` values (used by Prisma for 64-bit/128-bit integer columns like `chainEventId`, `chainTicketId`, and `price`) are not natively JSON-serializable and cause `TypeError: Do not know how to serialize a BigInt` when processed by standard `JSON.stringify()`.

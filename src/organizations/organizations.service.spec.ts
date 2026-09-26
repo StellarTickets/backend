@@ -14,6 +14,7 @@ describe('OrganizationsService', () => {
       findUnique: jest.Mock;
       findMany: jest.Mock;
       create: jest.Mock;
+      update: jest.Mock;
     };
     organizationMember: { create: jest.Mock; findUnique: jest.Mock };
     user: { updateMany: jest.Mock };
@@ -26,6 +27,7 @@ describe('OrganizationsService', () => {
         findUnique: jest.fn(),
         findMany: jest.fn(),
         create: jest.fn(),
+        update: jest.fn(),
       },
       organizationMember: { create: jest.fn(), findUnique: jest.fn() },
       user: { updateMany: jest.fn() },
@@ -86,6 +88,54 @@ describe('OrganizationsService', () => {
       await expect(service.findOne('missing-id')).rejects.toBeInstanceOf(
         NotFoundException,
       );
+    });
+
+    it('throws NotFoundException for a soft-deleted organization (#207)', async () => {
+      prisma.organization.findUnique.mockResolvedValue({
+        ...createOrganization({ id: 'org-1' }),
+        deletedAt: new Date('2026-09-26T00:00:00.000Z'),
+      });
+
+      await expect(service.findOne('org-1')).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+    });
+  });
+
+  describe('soft-delete (#207)', () => {
+    it('soft-deletes by setting deletedAt instead of hard-deleting', async () => {
+      prisma.organization.findUnique.mockResolvedValue(
+        createOrganization({ id: 'org-1', deletedAt: null } as never),
+      );
+      prisma.organizationMember.findUnique.mockResolvedValue({
+        id: 'membership-1',
+      });
+      prisma.organization.update.mockResolvedValue({ id: 'org-1' });
+
+      await service.softDelete('user-1', 'org-1');
+
+      expect(prisma.organization.update).toHaveBeenCalledWith({
+        where: { id: 'org-1' },
+        data: { deletedAt: expect.any(Date) },
+      });
+    });
+
+    it('restores a soft-deleted organization by clearing deletedAt', async () => {
+      prisma.organization.findUnique.mockResolvedValue({
+        ...createOrganization({ id: 'org-1' }),
+        deletedAt: new Date('2026-09-26T00:00:00.000Z'),
+      });
+      prisma.organizationMember.findUnique.mockResolvedValue({
+        id: 'membership-1',
+      });
+      prisma.organization.update.mockResolvedValue({ id: 'org-1' });
+
+      await service.restore('user-1', 'org-1');
+
+      expect(prisma.organization.update).toHaveBeenCalledWith({
+        where: { id: 'org-1' },
+        data: { deletedAt: null },
+      });
     });
   });
 

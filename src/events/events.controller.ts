@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Header,
   Param,
@@ -96,5 +97,23 @@ export class EventsController {
       eventId,
       dto.signedXdr,
     );
+  }
+
+  @Delete('events/:eventId')
+  @UseGuards(JwtAuthGuard)
+  softDelete(
+    @CurrentUser() user: CurrentUserPayload,
+    @Param('eventId') eventId: string,
+  ) {
+    return this.eventsService.softDelete(user.userId, eventId);
+  }
+
+  @Post('events/:eventId/restore')
+  @UseGuards(JwtAuthGuard)
+  restore(
+    @CurrentUser() user: CurrentUserPayload,
+    @Param('eventId') eventId: string,
+  ) {
+    return this.eventsService.restore(user.userId, eventId);
   }
 }

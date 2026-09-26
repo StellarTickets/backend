@@ -19,6 +19,7 @@ import { PromoCodesModule } from './promo-codes/promo-codes.module';
 import { GatesModule } from './gates/gates.module';
 import { ScannerDevicesModule } from './scanner-devices/scanner-devices.module';
 import { PendingTxModule } from './pending-tx/pending-tx.module';
+import { AuditModule } from './audit/audit.module';
 import { CacheModule } from './common/cache/cache.module';
 import { SchedulerModule } from './scheduler/scheduler.module';
 import { WebhooksModule } from './webhooks/webhooks.module';
@@ -47,6 +48,7 @@ import { DomainExceptionFilter } from './common/filters/domain-exception.filter'
     GatesModule,
     ScannerDevicesModule,
     PendingTxModule,
+    AuditModule,
   ],
   controllers: [AppController],
   providers: [

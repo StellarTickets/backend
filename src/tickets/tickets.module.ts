@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { OrganizationsModule } from '../organizations/organizations.module';
 import { StellarModule } from '../stellar/stellar.module';
+import { AuditModule } from '../audit/audit.module';
 import { TicketsController } from './tickets.controller';
 import { TicketsService } from './tickets.service';
 import { NotificationsModule } from '../notifications/notifications.module';
@@ -16,6 +17,7 @@ import { RateLimitModule } from '../common/rate-limit/rate-limit.module';
   imports: [
     OrganizationsModule,
     StellarModule,
+    AuditModule,
     NotificationsModule,
     PromoCodesModule,
     GatesModule,
