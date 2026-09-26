@@ -21,19 +21,30 @@ import type { OrganizationsService } from '../organizations/organizations.servic
 import type { StellarService } from '../stellar/stellar.service';
 import type { OfflineTokenService } from './offline-token.service';
 import type { ConfigService } from '@nestjs/config';
+import {
+  createEvent,
+  createOrganization,
+  createTicket,
+  createTicketType,
+  createUser,
+} from '../../test/factories';
 
 function buildTicketType(overrides: Partial<Record<string, unknown>> = {}) {
   return {
-    id: 'tt-1',
-    name: 'GA',
-    price: 1_000n,
-    quantityIssued: 0,
-    quantityTotal: 100,
+    ...createTicketType({
+      id: 'tt-1',
+      name: 'GA',
+      price: 1_000n,
+      quantityIssued: 0,
+      quantityTotal: 100,
+    }),
     event: {
-      id: 'event-1',
-      organizationId: 'org-1',
-      chainEventId: 42n,
-      organization: { stellarAccount: 'GORGANIZER' },
+      ...createEvent({
+        id: 'event-1',
+        organizationId: 'org-1',
+        chainEventId: 42n,
+      }),
+      organization: createOrganization({ stellarAccount: 'GORGANIZER' }),
     },
     ...overrides,
   };
@@ -166,10 +177,9 @@ describe('TicketsService', () => {
 
     it('requires the recipient to have a connected wallet', async () => {
       prisma.ticketType.findUnique.mockResolvedValue(buildTicketType());
-      prisma.user.findUnique.mockResolvedValue({
-        id: 'buyer-1',
-        stellarPublicKey: null,
-      });
+      prisma.user.findUnique.mockResolvedValue(
+        createUser({ id: 'buyer-1', stellarPublicKey: null }),
+      );
 
       await expect(
         service.buildIssueTx('organizer-1', 'tt-1', 'buyer-1', 'GBUYER'),
@@ -178,10 +188,9 @@ describe('TicketsService', () => {
 
     it('builds an issue_ticket transaction against the organizer account', async () => {
       prisma.ticketType.findUnique.mockResolvedValue(buildTicketType());
-      prisma.user.findUnique.mockResolvedValue({
-        id: 'buyer-1',
-        stellarPublicKey: 'GBUYER',
-      });
+      prisma.user.findUnique.mockResolvedValue(
+        createUser({ id: 'buyer-1', stellarPublicKey: 'GBUYER' }),
+      );
 
       const { unsignedXdr } = await service.buildIssueTx(
         'organizer-1',
@@ -214,10 +223,9 @@ describe('TicketsService', () => {
         Promise.resolve({ id: 'ticket-1', ...data }),
       );
 
-      prisma.user.findUnique.mockResolvedValue({
-        id: 'buyer-1',
-        stellarPublicKey: 'GBUYER',
-      });
+      prisma.user.findUnique.mockResolvedValue(
+        createUser({ id: 'buyer-1', stellarPublicKey: 'GBUYER' }),
+      );
 
       const ticket = await service.confirmIssue(
         'organizer-1',
@@ -246,14 +254,16 @@ describe('TicketsService', () => {
   describe('transfer', () => {
     it('refuses to build a transfer for a ticket the caller does not own', async () => {
       prisma.ticket.findUnique.mockResolvedValue({
-        id: 'ticket-1',
-        ownerId: 'someone-else',
-        chainTicketId: 7n,
+        ...createTicket({
+          id: 'ticket-1',
+          ownerId: 'someone-else',
+          chainTicketId: 7n,
+        }),
         event: {
           organizationId: 'org-1',
-          organization: { stellarAccount: 'GORG' },
+          organization: createOrganization({ stellarAccount: 'GORG' }),
         },
-      });
+      } as never);
 
       await expect(
         service.buildTransferTx(
@@ -267,17 +277,23 @@ describe('TicketsService', () => {
 
     it('builds a transfer using both parties on-chain public keys', async () => {
       prisma.ticket.findUnique.mockResolvedValue({
-        id: 'ticket-1',
-        ownerId: 'owner-1',
-        chainTicketId: 7n,
+        ...createTicket({
+          id: 'ticket-1',
+          ownerId: 'owner-1',
+          chainTicketId: 7n,
+        }),
         event: {
           organizationId: 'org-1',
-          organization: { stellarAccount: 'GORG' },
+          organization: createOrganization({ stellarAccount: 'GORG' }),
         },
-      });
+      } as never);
       prisma.user.findUnique
-        .mockResolvedValueOnce({ id: 'owner-1', stellarPublicKey: 'GOWNER' })
-        .mockResolvedValueOnce({ id: 'friend-1', stellarPublicKey: 'GFRIEND' });
+        .mockResolvedValueOnce(
+          createUser({ id: 'owner-1', stellarPublicKey: 'GOWNER' }),
+        )
+        .mockResolvedValueOnce(
+          createUser({ id: 'friend-1', stellarPublicKey: 'GFRIEND' }),
+        );
 
       await service.buildTransferTx(
         'owner-1',

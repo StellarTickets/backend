@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { OrganizationsService } from './organizations.service';
 import type { PrismaService } from '../prisma/prisma.service';
+import { createOrganization } from '../../test/factories';
 
 describe('OrganizationsService', () => {
   let service: OrganizationsService;
@@ -35,32 +36,37 @@ describe('OrganizationsService', () => {
 
   describe('create', () => {
     it('rejects a slug that is already taken', async () => {
-      prisma.organization.findUnique.mockResolvedValue({ id: 'existing-org' });
+      prisma.organization.findUnique.mockResolvedValue(
+        createOrganization({ id: 'existing-org' }),
+      );
 
       await expect(
-        service.create('user-1', {
-          name: 'Test Org',
-          slug: 'test-org',
-          industry: 'CONCERTS',
-          stellarAccount: 'G'.repeat(56),
-        } as never),
+        service.create(
+          'user-1',
+          createOrganization({
+            name: 'Test Org',
+            slug: 'test-org',
+            industry: 'CONCERTS',
+          }) as never,
+        ),
       ).rejects.toBeInstanceOf(ConflictException);
       expect(prisma.organization.create).not.toHaveBeenCalled();
     });
 
     it('creates the org, an OWNER membership, and promotes an ATTENDEE to ORGANIZER', async () => {
       prisma.organization.findUnique.mockResolvedValue(null);
-      prisma.organization.create.mockResolvedValue({
-        id: 'org-1',
-        slug: 'test-org',
-      });
+      prisma.organization.create.mockResolvedValue(
+        createOrganization({ id: 'org-1', slug: 'test-org' }),
+      );
 
-      const org = await service.create('user-1', {
-        name: 'Test Org',
-        slug: 'test-org',
-        industry: 'CONCERTS',
-        stellarAccount: 'G'.repeat(56),
-      } as never);
+      const org = await service.create(
+        'user-1',
+        createOrganization({
+          name: 'Test Org',
+          slug: 'test-org',
+          industry: 'CONCERTS',
+        }) as never,
+      );
 
       expect(prisma.organizationMember.create).toHaveBeenCalledWith({
         data: { organizationId: 'org-1', userId: 'user-1', role: 'OWNER' },
@@ -69,7 +75,7 @@ describe('OrganizationsService', () => {
         where: { id: 'user-1', role: 'ATTENDEE' },
         data: { role: 'ORGANIZER' },
       });
-      expect(org).toEqual({ id: 'org-1', slug: 'test-org' });
+      expect(org).toMatchObject({ id: 'org-1', slug: 'test-org' });
     });
   });
 
