@@ -99,7 +99,7 @@ describe('ScannerDevicesService', () => {
 
       expect(prisma.scannerDevice.update).toHaveBeenCalledWith({
         where: { id: 'device-1' },
-        data: { revokedAt: expect.any(Date) },
+        data: { revokedAt: expect.any(Date) as Date },
       });
     });
   });

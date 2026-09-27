@@ -11,7 +11,9 @@ import {
 import { IsBigIntString } from '../../common/decorators/is-bigint-string.decorator';
 
 export class CreateTicketTypeDto {
-  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @Transform(({ value }: { value: unknown }) =>
+    typeof value === 'string' ? value.trim() : value,
+  )
   @IsString()
   @MinLength(1)
   @MaxLength(256)

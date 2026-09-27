@@ -80,7 +80,7 @@ describe('createWebhookQueue', () => {
         defaultJobOptions: expect.objectContaining({
           attempts: 5,
           backoff: { type: 'exponential', delay: 5_000 },
-        }),
+        }) as object,
       }),
     );
   });
@@ -104,7 +104,7 @@ describe('createWebhookQueue', () => {
         defaultJobOptions: expect.objectContaining({
           attempts: 8,
           backoff: { type: 'exponential', delay: 250 },
-        }),
+        }) as object,
       }),
     );
   });
