@@ -15,7 +15,6 @@ export function formatPrice(
     throw new Error('Decimals cannot be negative');
   }
 
-  const priceStr = priceSmallestUnit.toString();
   const divisor = 10n ** BigInt(decimals);
   const integerPart = priceSmallestUnit / divisor;
   const fractionalPart = priceSmallestUnit % divisor;

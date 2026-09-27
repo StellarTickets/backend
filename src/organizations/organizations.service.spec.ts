@@ -116,7 +116,7 @@ describe('OrganizationsService', () => {
 
       expect(prisma.organization.update).toHaveBeenCalledWith({
         where: { id: 'org-1' },
-        data: { deletedAt: expect.any(Date) },
+        data: { deletedAt: expect.any(Date) as Date },
       });
     });
 

@@ -21,7 +21,9 @@ import { Industry } from '@prisma/client';
 export const STARTS_AT_PAST_TOLERANCE_MS = 60_000;
 
 export class CreateEventDto {
-  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @Transform(({ value }: { value: unknown }) =>
+    typeof value === 'string' ? value.trim() : value,
+  )
   @IsString()
   @MinLength(2)
   @MaxLength(256)
@@ -32,7 +34,9 @@ export class CreateEventDto {
   })
   category!: Industry;
 
-  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @Transform(({ value }: { value: unknown }) =>
+    typeof value === 'string' ? value.trim() : value,
+  )
   @IsString()
   @MinLength(1)
   @MaxLength(256)

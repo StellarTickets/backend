@@ -12,7 +12,9 @@ import { Industry } from '@prisma/client';
 import { IsStellarPublicKey } from '../../common/decorators/is-stellar-public-key.decorator';
 
 export class CreateOrganizationDto {
-  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @Transform(({ value }: { value: unknown }) =>
+    typeof value === 'string' ? value.trim() : value,
+  )
   @IsString()
   @MinLength(2)
   @MaxLength(256)

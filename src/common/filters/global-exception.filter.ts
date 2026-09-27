@@ -2,9 +2,11 @@ import {
   ArgumentsHost,
   Catch,
   ExceptionFilter,
+  HttpException,
   HttpStatus,
   Logger,
 } from '@nestjs/common';
+import type { Request, Response } from 'express';
 import { Prisma } from '@prisma/client';
 import { DomainError } from '../errors/domain.error';
 
@@ -24,8 +26,20 @@ export class GlobalExceptionFilter implements ExceptionFilter {
 
   catch(exception: unknown, host: ArgumentsHost): void {
     const ctx = host.switchToHttp();
-    const response = ctx.getResponse();
-    const request = ctx.getRequest();
+    const response = ctx.getResponse<Response>();
+    const request = ctx.getRequest<Request>();
+
+    // HttpExceptions (404s, 403s, ValidationPipe 400s, ...) already carry
+    // their status and body. Forward them unchanged so clients keep Nest's
+    // `{ statusCode, message, error }` shape instead of a generic 500.
+    if (exception instanceof HttpException) {
+      const statusCode = exception.getStatus();
+      const body = exception.getResponse();
+      response
+        .status(statusCode)
+        .json(typeof body === 'string' ? { statusCode, message: body } : body);
+      return;
+    }
 
     let statusCode = HttpStatus.INTERNAL_SERVER_ERROR;
     let code = 'INTERNAL_ERROR';

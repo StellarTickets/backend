@@ -10,7 +10,9 @@ export class ConfirmCheckInDto extends ConfirmSignedTxDto {
 
   /** Reason for check-in when scanner fails and staff override is used. */
   @IsOptional()
-  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @Transform(({ value }: { value: unknown }) =>
+    typeof value === 'string' ? value.trim() : value,
+  )
   @IsString()
   @MaxLength(512)
   reason?: string;

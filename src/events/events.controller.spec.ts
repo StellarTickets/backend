@@ -13,6 +13,7 @@ import {
 } from '../../test/helpers/controller-app';
 import { EventsController } from './events.controller';
 import { EventsService } from './events.service';
+import { ResponseCacheInterceptor } from '../common/interceptors/response-cache.interceptor';
 
 describe('EventsController', () => {
   let app: INestApplication;
@@ -33,6 +34,7 @@ describe('EventsController', () => {
     app = await createControllerApp({
       controller: EventsController,
       service: { provide: EventsService, useValue: service },
+      passthrough: { interceptors: [ResponseCacheInterceptor] },
     });
   });
   afterAll(() => app.close());

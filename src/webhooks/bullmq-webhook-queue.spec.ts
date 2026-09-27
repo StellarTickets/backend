@@ -52,7 +52,7 @@ describe('BullMqWebhookQueue', () => {
         defaultJobOptions: expect.objectContaining({
           attempts: 4,
           backoff: { type: 'exponential', delay: 2_000 },
-        }),
+        }) as object,
       }),
     );
   });
@@ -79,7 +79,7 @@ describe('BullMqWebhookQueue', () => {
     const { bullmq, Worker } = fakeBullMq();
     BullMqWebhookQueue.create(bullmq, options);
 
-    const processor = Worker.mock.calls[0][1] as (job: {
+    const processor = (Worker.mock.calls[0] as unknown[])[1] as (job: {
       data: typeof delivery;
     }) => Promise<unknown>;
     await processor({ data: delivery });

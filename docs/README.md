@@ -1,9 +1,9 @@
 # Docs index
 
-- [ARCHITECTURE.md](ARCHITECTURE.md) — module layout and the non-custodial write path
-- [API.md](API.md) — endpoint summary
+- [ARCHITECTURE.md](ARCHITECTURE.md) — module layout, the non-custodial write path, and sequence diagrams for the ticket lifecycle
+- [API.md](API.md) — every endpoint with request fields, curl and response examples
 - [DATABASE.md](DATABASE.md) — schema and migrations
-- [TESTING.md](TESTING.md) — test suite notes
+- [TESTING.md](TESTING.md) — test suite notes, the StellarService contract-mock harness
 - [DEPLOYMENT.md](DEPLOYMENT.md) — deployment checklist
 - [GLOSSARY.md](GLOSSARY.md) — terminology
 - [FAQ.md](FAQ.md) — frequently asked questions

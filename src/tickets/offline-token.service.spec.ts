@@ -1,11 +1,8 @@
-import { generateKeyPairSync } from 'node:crypto';
+import { generateKeyPairSync, type KeyObject } from 'node:crypto';
 import type { ConfigService } from '@nestjs/config';
 import { OfflineTokenService } from './offline-token.service';
 
-function pem(
-  key: { export: (opts: unknown) => string | Buffer },
-  type: 'pkcs8' | 'spki',
-) {
+function pem(key: KeyObject, type: 'pkcs8' | 'spki') {
   return key.export({ type, format: 'pem' }) as string;
 }
 

@@ -1,4 +1,9 @@
-import { HttpStatus } from '@nestjs/common';
+import {
+  BadRequestException,
+  HttpException,
+  HttpStatus,
+  NotFoundException,
+} from '@nestjs/common';
 import type { ArgumentsHost } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { GlobalExceptionFilter } from './global-exception.filter';
@@ -38,6 +43,50 @@ describe('GlobalExceptionFilter', () => {
       meta,
     });
   }
+
+  describe('HTTP exceptions', () => {
+    it('forwards a NotFoundException with its status and Nest body shape', () => {
+      const { argumentsHost, response } = host();
+      filter.catch(new NotFoundException('Ticket not found'), argumentsHost);
+      expect(response.status).toHaveBeenCalledWith(HttpStatus.NOT_FOUND);
+      expect(response.json).toHaveBeenCalledWith({
+        statusCode: HttpStatus.NOT_FOUND,
+        message: 'Ticket not found',
+        error: 'Not Found',
+      });
+    });
+
+    it('keeps ValidationPipe-style message arrays intact', () => {
+      const { argumentsHost, response } = host();
+      filter.catch(
+        new BadRequestException([
+          'price must be a non-negative integer string',
+        ]),
+        argumentsHost,
+      );
+      expect(response.status).toHaveBeenCalledWith(HttpStatus.BAD_REQUEST);
+      expect(response.json).toHaveBeenCalledWith({
+        statusCode: HttpStatus.BAD_REQUEST,
+        message: ['price must be a non-negative integer string'],
+        error: 'Bad Request',
+      });
+    });
+
+    it('wraps a bare string response body', () => {
+      const { argumentsHost, response } = host();
+      filter.catch(
+        new HttpException('slow down', HttpStatus.TOO_MANY_REQUESTS),
+        argumentsHost,
+      );
+      expect(response.status).toHaveBeenCalledWith(
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+      expect(response.json).toHaveBeenCalledWith({
+        statusCode: HttpStatus.TOO_MANY_REQUESTS,
+        message: 'slow down',
+      });
+    });
+  });
 
   describe('Prisma errors', () => {
     it('maps P2002 to 409 Conflict', () => {
