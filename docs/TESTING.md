@@ -4,10 +4,45 @@
 
 Every service is unit tested with Prisma, `OrganizationsService`, and
 `StellarService` mocked out — no real database or Soroban RPC call
-happens in `npm test`. `StellarService` is mocked at the module level
-(`jest.mock('../stellar/stellar.service', ...)`) rather than imported
-for real, because `@stellar/stellar-sdk` ships transitive ESM-only
-dependencies that need a wider `transformIgnorePatterns` to parse.
+happens in `npm test`. Service specs mock `StellarService` at the module
+level (`jest.mock('../stellar/stellar.service', ...)`) so they never
+touch XDR; the service itself is covered by the harness below.
+
+### StellarService contract-mock harness
+
+`src/stellar/stellar.service.spec.ts` runs the real `StellarService`
+against an in-memory Soroban RPC double, so transaction building, XDR
+encoding and result decoding are exercised for real while nothing goes
+over the network. The pieces:
+
+- `test/mocks/soroban-rpc.mock.ts` — the `rpc.Server` double
+  (`createMockRpcServer`), canned `sendTransaction` / `getTransaction` /
+  `simulateTransaction` responses, and `ticketScVal` / `eventScVal`
+  fixtures that encode the contract's `Ticket` and `Event` structs the
+  way `verify_ticket` and `get_event` return them.
+- `test/helpers/stellar-harness.ts` — `createStellarHarness()` boots the
+  service from an in-memory config (any of `testnet`, `futurenet`,
+  `mainnet`) and swaps in the double; `decodeInvokeHostFunction()` takes
+  an envelope back apart into source, fee, network passphrase, contract
+  id, function name, native arguments and XDR argument types;
+  `signAsWallet()` signs an envelope the way a wallet would.
+
+To cover a new `build*Tx` method, add a row to the `cases` table in the
+spec with the expected function name, arguments and argument types.
+To cover a new contract read, add a fixture next to `ticketScVal` and
+feed it through `simulationSuccess`.
+
+```bash
+npx jest src/stellar/stellar.service.spec.ts
+```
+
+### DTO specs
+
+Every request DTO with non-trivial rules has a colocated `*.dto.spec.ts`
+that runs `class-validator` with the same `whitelist` /
+`forbidNonWhitelisted` options as the global `ValidationPipe`, covering
+the accepted shape, each rejected field, unknown properties, and that
+several bad fields are reported together.
 
 ```bash
 npm test          # run unit tests
