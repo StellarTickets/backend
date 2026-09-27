@@ -22,7 +22,7 @@ export function createEvent(overrides: Partial<Event> = {}): Event {
     createdAt: new Date('2026-01-01T00:00:00.000Z'),
     updatedAt: new Date('2026-01-01T00:00:00.000Z'),
     // #207 — soft-delete marker (null = live).
-    ...({ deletedAt: null } as Partial<Event>),
+    deletedAt: null,
     ...overrides,
   };
 }
