@@ -1,10 +1,5 @@
-import { NestFactory } from '@nestjs/core';
-import { ValidationPipe, VersioningType } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
-import helmet from 'helmet';
-import { AppModule } from './app.module';
-import { GlobalExceptionFilter } from './common/filters/global-exception.filter';
+import 'dotenv/config';
+import { startTracing } from './tracing';
 
 async function bootstrap() {
   // Instrumentation must start before Nest and Express are loaded.
@@ -15,18 +10,37 @@ async function bootstrap() {
     { ValidationPipe, VersioningType },
     { ConfigService },
     { default: helmet },
+    { DocumentBuilder, SwaggerModule },
+    { GlobalExceptionFilter },
   ] = await Promise.all([
     import('@nestjs/core'),
     import('./app.module.js'),
     import('@nestjs/common'),
     import('@nestjs/config'),
     import('helmet'),
+    import('@nestjs/swagger'),
+    import('./common/filters/global-exception.filter.js'),
   ]);
   const app = await NestFactory.create(AppModule);
   if (tracing) app.enableShutdownHooks();
   const config = app.get(ConfigService);
 
-  app.use(helmet());
+  const cspDirectives = config.get<string>('CSP_DIRECTIVES');
+  const helmetOptions: Record<string, unknown> = {};
+  if (cspDirectives) {
+    try {
+      helmetOptions.contentSecurityPolicy = {
+        directives: JSON.parse(cspDirectives) as Record<string, string[]>,
+      };
+    } catch {
+      helmetOptions.contentSecurityPolicy = true;
+    }
+  }
+  app.use(helmet(helmetOptions));
+
+  const bodyLimit = config.get<string>('JSON_BODY_LIMIT', '100kb');
+  const express = await import('express');
+  app.use(express.json({ limit: bodyLimit }));
 
   const corsOrigins = config
     .getOrThrow<string>('CORS_ORIGINS')
