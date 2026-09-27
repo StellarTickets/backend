@@ -23,13 +23,16 @@ run with a missing or malformed value. See
 | `DATABASE_URL` | string | **required** | — | yes | PostgreSQL connection string for the Prisma client. This is the single system of record; see docs/DATABASE.md.
 | `RATE_LIMIT_STORE` | `memory \| redis` | optional | `memory` | yes | Where rate-limit counters live. `memory` (default) is per-process; `redis` shares them across instances. See docs/RATE_LIMITING.md.
 | `CACHE_DRIVER` | `memory \| redis` | optional | `memory` | yes | Where cached entries live. `memory` (default) is per-process; `redis` shares them across instances. See docs/CACHING.md.
+| `CACHE_TTL_SECONDS` | integer | optional | `60` \* | yes | Default time-to-live, in seconds, for entries written by the response cache interceptor on public event listings. Default 60. See docs/CACHING.md.
 | `WEBHOOK_QUEUE_ENABLED` | `true \| false` | optional | `false` | yes | Enables the BullMQ-backed outbound webhook queue. Kept as the literal strings 'true'/'false' (like the feature flags) because implicit conversion would turn the string 'false' into boolean true. Off unless 'true'. See docs/WEBHOOKS.md.
 | `WEBHOOK_QUEUE_ATTEMPTS` | integer | optional | `5` \* | yes | Total delivery attempts per webhook, the first included. Default 5.
 | `WEBHOOK_QUEUE_BACKOFF_MS` | integer | optional | `5000` \* | yes | Delay before the first webhook retry, doubling on each further retry. Default 5000.
 | `SCHEDULER_ENABLED` | `true \| false` | optional | `true` | yes | Set to 'false' to switch off every cron job registered through SchedulerModule. On unless 'false'. See docs/SCHEDULER.md.
 | `REDIS_URL` | string | conditional | — | yes (when required) | Redis connection URL (e.g. redis://localhost:6379). Required when RATE_LIMIT_STORE=redis, CACHE_DRIVER=redis or WEBHOOK_QUEUE_ENABLED=true.
 | `JWT_SECRET` | string (min 32 chars) | **required** | — | yes | Secret used to sign and verify JWT access tokens. Must be at least 32 characters. Rotating it invalidates every issued token. See docs/AUTHENTICATION.md.
-| `APP_URL` | string | **required** | `http://localhost:3001` | yes | Public origin this API is reached at, e.g. http://localhost:3001. Used as the CORS allow-list and to build links in outbound email/webhooks.
+| `CORS_ORIGINS` | string | **required** | `http://localhost:3001` | yes | Comma-separated list of allowed CORS origins (e.g. "https://app.example.com,https://staging.example.com"). Wildcard (*) is NOT allowed in production. Used as the CORS allow-list and to build links in outbound email/webhooks.
+| `JSON_BODY_LIMIT` | string | optional | `100kb` | yes | Maximum accepted JSON request body, as an Express size string such as 100kb or 1mb. Larger payloads are rejected with 413. Default 100kb.
+| `CSP_DIRECTIVES` | string | optional | `{"defaultSrc":["'self'"],"scriptSrc":["'self'"]}` \* | yes | Helmet Content-Security-Policy directives as a JSON object string, e.g. {"defaultSrc":["'self'"]}. Leave unset to keep helmet's defaults.
 | `SOROBAN_RPC_URL` | string | **required** | — | yes | Soroban RPC endpoint the StellarService submits contract calls through.
 | `STELLAR_NETWORK` | `testnet \| futurenet \| mainnet` | **required** | `testnet` | yes | Which Stellar network every contract call targets. Must match the network the `ticketing` contract is deployed on and the one user wallets are set to, or every submit will fail.
 | `TICKETING_CONTRACT_ID` | string | **required** | — | yes | Deployed `ticketing` contract's C... address.

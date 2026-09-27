@@ -59,6 +59,13 @@ class EnvironmentVariables {
   @IsOptional()
   CACHE_DRIVER?: string;
 
+  /// Default time-to-live, in seconds, for entries written by the response
+  /// cache interceptor on public event listings. Default 60. See
+  /// docs/CACHING.md.
+  @IsInt()
+  @IsOptional()
+  CACHE_TTL_SECONDS?: number;
+
   /// Enables the BullMQ-backed outbound webhook queue. Kept as the literal
   /// strings 'true'/'false' (like the feature flags) because implicit
   /// conversion would turn the string 'false' into boolean true. Off unless
@@ -107,6 +114,18 @@ class EnvironmentVariables {
   /// and to build links in outbound email/webhooks.
   @IsString()
   CORS_ORIGINS!: string;
+
+  /// Maximum accepted JSON request body, as an Express size string such as
+  /// 100kb or 1mb. Larger payloads are rejected with 413. Default 100kb.
+  @IsString()
+  @IsOptional()
+  JSON_BODY_LIMIT?: string;
+
+  /// Helmet Content-Security-Policy directives as a JSON object string, e.g.
+  /// {"defaultSrc":["'self'"]}. Leave unset to keep helmet's defaults.
+  @IsString()
+  @IsOptional()
+  CSP_DIRECTIVES?: string;
 
   /// Soroban RPC endpoint the StellarService submits contract calls through.
   @IsString()
