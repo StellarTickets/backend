@@ -280,8 +280,8 @@ describe('TicketsService', () => {
 
       // The row lock precedes the increment inside the same transaction.
       expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
-      const [query] = prisma.$queryRaw.mock.calls[0];
-      expect(query[0]).toContain('FOR UPDATE');
+      const [query] = prisma.$queryRaw.mock.calls[0] as [TemplateStringsArray];
+      expect(query.join('')).toContain('FOR UPDATE');
       expect(prisma.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
         prisma.ticketType.update.mock.invocationCallOrder[0],
       );
@@ -1160,7 +1160,7 @@ describe('TicketsService', () => {
         expect.objectContaining({
           data: expect.objectContaining({
             checkInReason: 'scanner_malfunction',
-          }),
+          }) as object,
         }),
       );
     });
@@ -1183,7 +1183,7 @@ describe('TicketsService', () => {
         expect.objectContaining({
           data: expect.objectContaining({
             checkInReason: null,
-          }),
+          }) as object,
         }),
       );
     });
