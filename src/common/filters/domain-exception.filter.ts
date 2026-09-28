@@ -4,6 +4,7 @@ import {
   ExceptionFilter,
   HttpStatus,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { DomainError } from '../errors/domain.error';
 
 const STATUS_BY_CODE: Readonly<Record<string, number>> = {
@@ -14,7 +15,7 @@ const STATUS_BY_CODE: Readonly<Record<string, number>> = {
 @Catch(DomainError)
 export class DomainExceptionFilter implements ExceptionFilter {
   catch(exception: DomainError, host: ArgumentsHost): void {
-    const response = host.switchToHttp().getResponse();
+    const response = host.switchToHttp().getResponse<Response>();
     const statusCode =
       STATUS_BY_CODE[exception.code] ?? HttpStatus.INTERNAL_SERVER_ERROR;
 

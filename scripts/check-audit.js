@@ -40,19 +40,38 @@ function runAudit() {
   }
 }
 
+/**
+ * Collects the advisory ids behind a finding. `npm audit` reports a package
+ * that is only vulnerable through a dependency with the dependency's *name*
+ * in `via`, not the advisory, so follow those names down to the advisories
+ * that actually caused the finding. An allowlisted advisory then clears
+ * every package it reached.
+ */
+function advisoryIds(advisory, vulnerabilities, seen = new Set()) {
+  const ids = [];
+  for (const via of advisory.via ?? []) {
+    if (typeof via === "object" && via.source) {
+      ids.push(String(via.source));
+    } else if (typeof via === "string" && !seen.has(via) && vulnerabilities[via]) {
+      seen.add(via);
+      ids.push(...advisoryIds(vulnerabilities[via], vulnerabilities, seen));
+    }
+  }
+  return ids;
+}
+
 function main() {
   const allowlist = loadAllowlist();
   const report = runAudit();
-  const advisories = Object.values(report.vulnerabilities ?? {});
+  const vulnerabilities = report.vulnerabilities ?? {};
+  const advisories = Object.values(vulnerabilities);
 
   const failures = [];
   for (const advisory of advisories) {
     const severity = advisory.severity;
     if ((SEVERITY_RANK[severity] ?? 0) < SEVERITY_RANK[THRESHOLD]) continue;
 
-    const ids = (advisory.via ?? [])
-      .filter((v) => typeof v === "object" && v.source)
-      .map((v) => String(v.source));
+    const ids = advisoryIds(advisory, vulnerabilities);
 
     const allAllowlisted = ids.length > 0 && ids.every((id) => allowlist[id]);
     if (allAllowlisted) continue;

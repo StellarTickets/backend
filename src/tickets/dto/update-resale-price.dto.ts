@@ -3,5 +3,5 @@ import { IsBigIntString } from '../../common/decorators/is-bigint-string.decorat
 export class UpdateResalePriceDto {
   /** Updated asking price in settlement token smallest units. */
   @IsBigIntString()
-  price: string;
+  price!: string;
 }

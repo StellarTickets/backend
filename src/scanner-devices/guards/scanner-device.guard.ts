@@ -29,7 +29,7 @@ export class ScannerDeviceGuard implements CanActivate {
     const device = await this.scannerDevices.authenticate(token);
 
     const ticketId = request.params.ticketId;
-    if (ticketId) {
+    if (typeof ticketId === 'string') {
       const ticket = await this.prisma.ticket.findUnique({
         where: { id: ticketId },
         select: { eventId: true },

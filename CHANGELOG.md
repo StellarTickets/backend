@@ -6,6 +6,7 @@ This project follows [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- Controller unit specs for events, tickets, organizations and users (route wiring, guards, DTO validation, error propagation) and an auth-flow e2e suite (register, login, `/users/me`)
 - Auth (register/login, JWT)
 - Organizations, events, ticket types
 - Non-custodial ticket lifecycle: issue, purchase, transfer, check-in,

@@ -10,16 +10,40 @@ import {
 } from 'class-validator';
 
 class EnvironmentVariables {
+  /// Which NestJS environment the app runs in. Drives logging verbosity and
+  /// whether development-only behaviour is enabled.
   @IsIn(['development', 'test', 'production'])
   NODE_ENV!: string;
 
+  /// Opt in to HTTP/NestJS OpenTelemetry spans. Off unless literally 'true'.
+  /// See docs/TRACING.md.
+  @IsIn(['true', 'false'])
+  @IsOptional()
+  OTEL_TRACING_ENABLED?: string;
+
+  /// Service name attached to exported spans; defaults to stellar-tickets-backend.
+  @IsString()
+  @IsOptional()
+  OTEL_SERVICE_NAME?: string;
+
+  /// OTLP HTTP trace collector URL. Defaults to http://localhost:4318/v1/traces.
+  @IsString()
+  @IsOptional()
+  OTEL_EXPORTER_OTLP_TRACES_ENDPOINT?: string;
+
+  /// TCP port the HTTP server binds. Match it to the `port` in docker-compose.yml
+  /// when running the API in a container.
   @IsInt()
   PORT!: number;
 
+  /// Soft cap on how many `ACTIVE` resale listings one seller may hold at
+  /// once. Listing beyond it is rejected, not queued. See docs/RESALE_EXPIRY.md.
   @IsInt()
   @IsOptional()
   MAX_ACTIVE_RESALE_LISTINGS_PER_USER?: number;
 
+  /// PostgreSQL connection string for the Prisma client. This is the single
+  /// system of record; see docs/DATABASE.md.
   @IsString()
   DATABASE_URL!: string;
 
@@ -34,6 +58,13 @@ class EnvironmentVariables {
   @IsIn(['memory', 'redis'])
   @IsOptional()
   CACHE_DRIVER?: string;
+
+  /// Default time-to-live, in seconds, for entries written by the response
+  /// cache interceptor on public event listings. Default 60. See
+  /// docs/CACHING.md.
+  @IsInt()
+  @IsOptional()
+  CACHE_TTL_SECONDS?: number;
 
   /// Enables the BullMQ-backed outbound webhook queue. Kept as the literal
   /// strings 'true'/'false' (like the feature flags) because implicit
@@ -71,17 +102,38 @@ class EnvironmentVariables {
   @IsString()
   REDIS_URL?: string;
 
+  /// Secret used to sign and verify JWT access tokens. Must be at least 32
+  /// characters. Rotating it invalidates every issued token. See
+  /// docs/AUTHENTICATION.md.
   @IsString()
   @MinLength(32)
   JWT_SECRET!: string;
 
+  /// Comma-separated list of allowed CORS origins (e.g. "https://app.example.com,https://staging.example.com").
+  /// Wildcard (*) is NOT allowed in production. Used as the CORS allow-list
+  /// and to build links in outbound email/webhooks.
   @IsString()
-  APP_URL!: string;
+  CORS_ORIGINS!: string;
+
+  /// Maximum accepted JSON request body, as an Express size string such as
+  /// 100kb or 1mb. Larger payloads are rejected with 413. Default 100kb.
+  @IsString()
+  @IsOptional()
+  JSON_BODY_LIMIT?: string;
+
+  /// Helmet Content-Security-Policy directives as a JSON object string, e.g.
+  /// {"defaultSrc":["'self'"]}. Leave unset to keep helmet's defaults.
+  @IsString()
+  @IsOptional()
+  CSP_DIRECTIVES?: string;
 
   /// Soroban RPC endpoint the StellarService submits contract calls through.
   @IsString()
   SOROBAN_RPC_URL!: string;
 
+  /// Which Stellar network every contract call targets. Must match the network
+  /// the `ticketing` contract is deployed on and the one user wallets are set
+  /// to, or every submit will fail.
   @IsIn(['testnet', 'futurenet', 'mainnet'])
   STELLAR_NETWORK!: string;
 
@@ -136,6 +188,11 @@ export function validate(config: Record<string, unknown>) {
 
   if (errors.length > 0) {
     throw new Error(`Invalid environment configuration: ${errors.toString()}`);
+  }
+
+  const corsOrigins = validated.CORS_ORIGINS.split(',').map((o) => o.trim());
+  if (validated.NODE_ENV === 'production' && corsOrigins.includes('*')) {
+    throw new Error('CORS_ORIGINS wildcard (*) is not allowed in production');
   }
 
   return validated;

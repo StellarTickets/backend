@@ -182,7 +182,7 @@ describe('WaitlistService', () => {
           where: { id: { in: ['entry-1', 'entry-2'] } },
           data: expect.objectContaining({
             status: WaitlistEntryStatus.OFFERED,
-          }),
+          }) as object,
         }),
       );
     });

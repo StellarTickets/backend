@@ -1,11 +1,12 @@
 import { IsOptional, IsString, IsUUID, Length } from 'class-validator';
+import { IsSeat } from '../../common/decorators/is-seat.decorator';
 
 export class PurchasePrimaryDto {
   @IsUUID()
   ticketTypeId!: string;
 
   @IsOptional()
-  @IsString()
+  @IsSeat()
   seat?: string;
 
   @IsOptional()

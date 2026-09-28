@@ -7,11 +7,9 @@ import {
 import { Observable } from 'rxjs';
 import { map } from 'rxjs/operators';
 
-if (
-  typeof BigInt.prototype !== 'undefined' &&
-  !(BigInt.prototype as any).toJSON
-) {
-  (BigInt.prototype as any).toJSON = function (this: bigint) {
+const bigIntPrototype = BigInt.prototype as { toJSON?: () => string };
+if (!bigIntPrototype.toJSON) {
+  bigIntPrototype.toJSON = function (this: bigint) {
     return this.toString();
   };
 }
@@ -22,11 +20,16 @@ if (
  */
 @Injectable()
 export class BigIntSerializerInterceptor implements NestInterceptor {
-  intercept(_context: ExecutionContext, next: CallHandler): Observable<any> {
-    return next.handle().pipe(map((data) => this.serializeBigInts(data)));
+  intercept(
+    _context: ExecutionContext,
+    next: CallHandler,
+  ): Observable<unknown> {
+    return next
+      .handle()
+      .pipe(map((data: unknown) => this.serializeBigInts(data)));
   }
 
-  private serializeBigInts(value: any): any {
+  private serializeBigInts(value: unknown): unknown {
     if (value === null || value === undefined) {
       return value;
     }
@@ -44,11 +47,9 @@ export class BigIntSerializerInterceptor implements NestInterceptor {
     }
 
     if (typeof value === 'object') {
-      const converted: any = {};
-      for (const key in value) {
-        if (Object.prototype.hasOwnProperty.call(value, key)) {
-          converted[key] = this.serializeBigInts(value[key]);
-        }
+      const converted: Record<string, unknown> = {};
+      for (const [key, nested] of Object.entries(value)) {
+        converted[key] = this.serializeBigInts(nested);
       }
       return converted;
     }

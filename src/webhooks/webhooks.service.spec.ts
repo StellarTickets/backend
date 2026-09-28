@@ -7,7 +7,14 @@ import { WEBHOOK_QUEUE } from './webhook-queue';
 
 describe('WebhooksService', () => {
   let service: WebhooksService;
-  let prisma: { webhookEndpoint: any };
+  let prisma: {
+    webhookEndpoint: {
+      create: jest.Mock;
+      findMany: jest.Mock;
+      findFirst: jest.Mock;
+      delete: jest.Mock;
+    };
+  };
   let organizationsService: { assertMember: jest.Mock };
   let webhookQueue: { enqueue: jest.Mock };
 

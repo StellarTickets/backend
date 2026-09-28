@@ -18,7 +18,8 @@ export class GatesService {
     const event = await this.prisma.event.findUnique({
       where: { id: eventId },
     });
-    if (!event) {
+    // #207 — soft-deleted events behave as not-found.
+    if (!event || (event as { deletedAt?: Date | null }).deletedAt) {
       throw new NotFoundException('Event not found');
     }
     await this.organizations.assertMember(event.organizationId, userId);
@@ -39,7 +40,7 @@ export class GatesService {
     const event = await this.prisma.event.findUnique({
       where: { id: eventId },
     });
-    if (!event) {
+    if (!event || (event as { deletedAt?: Date | null }).deletedAt) {
       throw new NotFoundException('Event not found');
     }
     await this.organizations.assertMember(event.organizationId, userId);

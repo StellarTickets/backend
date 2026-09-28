@@ -1,4 +1,4 @@
-import type { CallHandler, ExecutionContext } from '@nestjs/common';
+import type { ExecutionContext } from '@nestjs/common';
 import { of } from 'rxjs';
 import { IdempotencyInterceptor } from './idempotency.interceptor';
 import type { ConfigService } from '@nestjs/config';
@@ -13,7 +13,7 @@ function buildContext(headers: Record<string, string | undefined>) {
   } as unknown as ExecutionContext;
 }
 
-function buildHandler(response: unknown): CallHandler {
+function buildHandler(response: unknown): { handle: jest.Mock } {
   return { handle: jest.fn().mockReturnValue(of(response)) };
 }
 
