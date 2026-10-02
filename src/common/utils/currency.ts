@@ -7,12 +7,14 @@
  * @param decimals - Number of decimal places (default: 7 for Stellar)
  * @returns Formatted price string with decimals
  */
-export function formatPrice(priceSmallestUnit: bigint, decimals: number = 7): string {
+export function formatPrice(
+  priceSmallestUnit: bigint,
+  decimals: number = 7,
+): string {
   if (decimals < 0) {
     throw new Error('Decimals cannot be negative');
   }
 
-  const priceStr = priceSmallestUnit.toString();
   const divisor = 10n ** BigInt(decimals);
   const integerPart = priceSmallestUnit / divisor;
   const fractionalPart = priceSmallestUnit % divisor;

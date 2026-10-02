@@ -31,7 +31,9 @@ describe('PendingTxCleanupService', () => {
 
     expect(pendingTx.deleteExpired).toHaveBeenCalledTimes(1);
     expect(scheduler.addInterval).toHaveBeenCalledTimes(1);
-    expect(scheduler.addInterval.mock.calls[0][0]).toBe('pending-tx-cleanup');
+    expect((scheduler.addInterval.mock.calls[0] as unknown[])[0]).toBe(
+      'pending-tx-cleanup',
+    );
   });
 
   it('uses the configured cleanup interval', () => {

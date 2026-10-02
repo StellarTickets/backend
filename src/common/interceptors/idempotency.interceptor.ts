@@ -34,13 +34,10 @@ export class IdempotencyInterceptor implements NestInterceptor {
 
   constructor(private readonly config: ConfigService) {}
 
-  intercept(
-    context: ExecutionContext,
-    next: CallHandler,
-  ): Observable<unknown> {
-    const request = context.switchToHttp().getRequest<
-      Request & { user?: CurrentUserPayload }
-    >();
+  intercept(context: ExecutionContext, next: CallHandler): Observable<unknown> {
+    const request = context
+      .switchToHttp()
+      .getRequest<Request & { user?: CurrentUserPayload }>();
     const idempotencyKey = request.header('Idempotency-Key');
 
     if (!idempotencyKey) {

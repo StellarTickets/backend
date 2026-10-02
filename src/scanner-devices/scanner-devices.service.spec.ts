@@ -66,9 +66,9 @@ describe('ScannerDevicesService', () => {
         revokedAt: new Date(),
       });
 
-      await expect(service.authenticate('revoked-token')).rejects.toBeInstanceOf(
-        UnauthorizedException,
-      );
+      await expect(
+        service.authenticate('revoked-token'),
+      ).rejects.toBeInstanceOf(UnauthorizedException);
       expect(prisma.scannerDevice.update).not.toHaveBeenCalled();
     });
 
@@ -99,7 +99,7 @@ describe('ScannerDevicesService', () => {
 
       expect(prisma.scannerDevice.update).toHaveBeenCalledWith({
         where: { id: 'device-1' },
-        data: { revokedAt: expect.any(Date) },
+        data: { revokedAt: expect.any(Date) as Date },
       });
     });
   });

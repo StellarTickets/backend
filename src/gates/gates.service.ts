@@ -1,4 +1,8 @@
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { OrganizationsService } from '../organizations/organizations.service';
 import { CreateGateDto } from './dto/create-gate.dto';
@@ -11,8 +15,11 @@ export class GatesService {
   ) {}
 
   async create(userId: string, eventId: string, dto: CreateGateDto) {
-    const event = await this.prisma.event.findUnique({ where: { id: eventId } });
-    if (!event) {
+    const event = await this.prisma.event.findUnique({
+      where: { id: eventId },
+    });
+    // #207 — soft-deleted events behave as not-found.
+    if (!event || (event as { deletedAt?: Date | null }).deletedAt) {
       throw new NotFoundException('Event not found');
     }
     await this.organizations.assertMember(event.organizationId, userId);
@@ -21,15 +28,19 @@ export class GatesService {
       where: { eventId_name: { eventId, name: dto.name } },
     });
     if (existing) {
-      throw new ConflictException('A gate with this name already exists for this event');
+      throw new ConflictException(
+        'A gate with this name already exists for this event',
+      );
     }
 
     return this.prisma.gate.create({ data: { eventId, name: dto.name } });
   }
 
   async listForEvent(userId: string, eventId: string) {
-    const event = await this.prisma.event.findUnique({ where: { id: eventId } });
-    if (!event) {
+    const event = await this.prisma.event.findUnique({
+      where: { id: eventId },
+    });
+    if (!event || (event as { deletedAt?: Date | null }).deletedAt) {
       throw new NotFoundException('Event not found');
     }
     await this.organizations.assertMember(event.organizationId, userId);

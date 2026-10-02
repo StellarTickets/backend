@@ -82,3 +82,82 @@ tokens (`JwtModule`) and to verify them (`JwtStrategy`). If the secret is
 missing, or fails the strength rules above, the app doesn't start. Rotating
 the secret requires a restart, and a restart invalidates tokens already
 issued.
+
+## Environment variables
+
+<!-- BEGIN GENERATED: env table (npm run docs:env) -->
+
+| Variable | Type | Required | Default | Validated at boot | Description |
+| --- | --- | --- | --- | --- | --- |
+| `NODE_ENV` | `development \| test \| production` | **required** | `development` | yes | Which NestJS environment the app runs in. Drives logging verbosity and whether development-only behaviour is enabled.
+| `OTEL_TRACING_ENABLED` | `true \| false` | optional | `false` | yes | Opt in to HTTP/NestJS OpenTelemetry spans. Off unless literally 'true'. See docs/TRACING.md.
+| `OTEL_SERVICE_NAME` | string | optional | `stellar-tickets-backend` \* | yes | Service name attached to exported spans; defaults to stellar-tickets-backend.
+| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | string | optional | `http://localhost:4318/v1/traces` \* | yes | OTLP HTTP trace collector URL. Defaults to http://localhost:4318/v1/traces.
+| `PORT` | integer | **required** | `3000` | yes | TCP port the HTTP server binds. Match it to the `port` in docker-compose.yml when running the API in a container.
+| `API_PREFIX` | — | optional | — | yes | Optional path every route is mounted under (e.g. `api/v1`), for hosting behind a reverse-proxy path. Health routes stay at the root.
+| `MAX_ACTIVE_RESALE_LISTINGS_PER_USER` | integer | optional | `5` | yes | Soft cap on how many `ACTIVE` resale listings one seller may hold at once. Listing beyond it is rejected, not queued. See docs/RESALE_EXPIRY.md.
+| `DATABASE_URL` | string | **required** | — | yes | PostgreSQL connection string for the Prisma client. This is the single system of record; see docs/DATABASE.md.
+| `RATE_LIMIT_STORE` | `memory \| redis` | optional | `memory` | yes | Where rate-limit counters live. `memory` (default) is per-process; `redis` shares them across instances. See docs/RATE_LIMITING.md.
+| `CACHE_DRIVER` | `memory \| redis` | optional | `memory` | yes | Where cached entries live. `memory` (default) is per-process; `redis` shares them across instances. See docs/CACHING.md.
+| `CACHE_TTL_SECONDS` | integer | optional | `60` \* | yes | Default time-to-live, in seconds, for entries written by the response cache interceptor on public event listings. Default 60. See docs/CACHING.md.
+| `WEBHOOK_QUEUE_ENABLED` | `true \| false` | optional | `false` | yes | Enables the BullMQ-backed outbound webhook queue. Kept as the literal strings 'true'/'false' (like the feature flags) because implicit conversion would turn the string 'false' into boolean true. Off unless 'true'. See docs/WEBHOOKS.md.
+| `WEBHOOK_QUEUE_ATTEMPTS` | integer | optional | `5` \* | yes | Total delivery attempts per webhook, the first included. Default 5.
+| `WEBHOOK_QUEUE_BACKOFF_MS` | integer | optional | `5000` \* | yes | Delay before the first webhook retry, doubling on each further retry. Default 5000.
+| `SCHEDULER_ENABLED` | `true \| false` | optional | `true` | yes | Set to 'false' to switch off every cron job registered through SchedulerModule. On unless 'false'. See docs/SCHEDULER.md.
+| `REDIS_URL` | string | conditional | — | yes (when required) | Redis connection URL (e.g. redis://localhost:6379). Required when RATE_LIMIT_STORE=redis, CACHE_DRIVER=redis or WEBHOOK_QUEUE_ENABLED=true.
+| `SECRETS_PROVIDER` | — | optional | `env` | yes | Where secrets such as JWT_SECRET are read from: `env` (default), `file` (`<KEY>_FILE` paths) or `custom` (a provider passed to `SecretsModule.forRoot`). See docs/CONFIGURATION.md.
+| `JWT_SECRET` | string | conditional | — | yes (when required) | Required when SECRETS_PROVIDER is `env` (the default).
+| `JWT_SECRET_FILE` | string | conditional | — | yes (when required) | Path of the file holding JWT_SECRET; required when SECRETS_PROVIDER=file.
+| `CORS_ORIGINS` | string | **required** | `http://localhost:3001` | yes | Comma-separated list of allowed CORS origins (e.g. "https://app.example.com,https://staging.example.com"). Wildcard (*) is NOT allowed in production. Used as the CORS allow-list and to build links in outbound email/webhooks.
+| `JSON_BODY_LIMIT` | string | optional | `100kb` | yes | Maximum accepted JSON request body, as an Express size string such as 100kb or 1mb. Larger payloads are rejected with 413. Default 100kb.
+| `CSP_DIRECTIVES` | string | optional | `{"defaultSrc":["'self'"],"scriptSrc":["'self'"]}` \* | yes | Helmet Content-Security-Policy directives as a JSON object string, e.g. {"defaultSrc":["'self'"]}. Leave unset to keep helmet's defaults.
+| `SOROBAN_RPC_URL` | string | **required** | — | yes | Soroban RPC endpoint the StellarService submits contract calls through.
+| `STELLAR_NETWORK` | — | **required** | `testnet` | yes | Which Stellar network every contract call targets. Must match the network the `ticketing` contract is deployed on and the one user wallets are set
+| `TICKETING_CONTRACT_ID` | string | **required** | — | yes | Deployed `ticketing` contract's C... address.
+| `PLATFORM_SIGNER_SECRET` | string | **required** | — | yes | Platform signer used for contract calls submitted on behalf of the backend itself (e.g. relaying an organizer's already-authorized op).
+| `OFFLINE_SIGNING_KEY_ID` | string | **required** | `2026-01` | yes | Key id of the Ed25519 key currently used to sign offline verification tokens. Must have a matching entry in OFFLINE_SIGNING_PUBLIC_KEYS.
+| `OFFLINE_SIGNING_PRIVATE_KEY` | string | **required** | — | yes | PEM-encoded Ed25519 private key used to sign offline verification tokens. See docs/OFFLINE_VERIFICATION.md for generation and rotation.
+| `OFFLINE_SIGNING_PUBLIC_KEYS` | string | **required** | — | yes | JSON map of key id -> PEM-encoded Ed25519 public key. Every key a scanner should still accept, current and retired, so tokens signed before a rotation keep verifying until they expire.
+| `PENDING_TX_RETENTION_MINUTES` | integer | optional | `60` | yes | How long a PendingTx row (build-transaction intent) stays valid before it's considered expired and eligible for cleanup.
+| `PENDING_TX_CLEANUP_INTERVAL_MINUTES` | integer | optional | `15` | yes | How often the PendingTx cleanup job runs, in minutes.
+| `IDEMPOTENCY_KEY_TTL_MINUTES` | integer | optional | `15` | yes | How long a cached response for an Idempotency-Key stays valid, in minutes, before a repeated key is treated as a new request.
+| `SCAN_RATE_LIMIT_MAX` | integer | optional | `10` | **no** | Scans allowed per window per device, for ticket check-in abuse prevention. See docs/RATE_LIMITING.md.
+| `SCAN_RATE_LIMIT_WINDOW_MS` | integer | optional | `60000` | **no** | Length of the scan rate-limit window, in milliseconds.
+| `FEATURE_FEE_BUMP` | boolean (string) | optional | `false` | **no** | Experimental: enable the fee-bump path. Off unless exactly 'true'. See docs/FEATURE_FLAGS.md.
+| `FEATURE_INDEXER` | boolean (string) | optional | `false` | **no** | Experimental: enable the chain indexer. Off unless exactly 'true'. See docs/FEATURE_FLAGS.md.
+| \* | | | | | The value used in code when the variable is unset. Commented out in `.env.example` because it only applies once the related optional feature is enabled. |
+
+<!-- END GENERATED: env table -->
+
+The table above is generated from `src/config/env.validation.ts` and
+`.env.example` by `npm run docs:env`. Do not edit it by hand — edit one of
+those two files and re-run the script. `npm run docs:check` fails if the two
+sources have drifted apart, so a variable added to one but not the other
+cannot land unnoticed.
+
+**Validated at boot** means the app refuses to start when the value is missing
+or malformed. A handful of variables are read directly by `ConfigService`
+without going through validation — they are flagged **no** above. A typo in
+one of those fails *silently* and the feature simply stays on its default, so
+check the spelling if a flag or limit does not take effect.
+
+## Security Headers (Helmet)
+
+The API uses [helmet](https://helmetjs.github.io/) with these defaults:
+- `contentSecurityPolicy`: enabled (configurable via `CSP_DIRECTIVES`)
+- `crossOriginEmbedderPolicy`: enabled
+- `crossOriginOpenerPolicy`: enabled
+- `crossOriginResourcePolicy`: enabled
+- `dnsPrefetchControl`: enabled
+- `frameguard`: enabled (deny)
+- `hidePoweredBy`: enabled
+- `hsts`: enabled (1 year, includeSubDomains)
+- `ieNoOpen`: enabled
+- `noSniff`: enabled
+- `originAgentCluster`: enabled
+- `referrerPolicy`: enabled (no-when-downgrade)
+- `xssFilter`: enabled
+
+Disabled headers (not needed for API-only backend):
+- `x-powered-by`: removed by `hidePoweredBy`
+- `x-dns-prefetch-control`: controlled by `dnsPrefetchControl`

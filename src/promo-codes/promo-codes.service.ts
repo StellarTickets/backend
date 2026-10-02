@@ -11,7 +11,11 @@ import { CreatePromoCodeDto } from './dto/create-promo-code.dto';
 const MAX_PERCENT_BPS = 10_000;
 
 export interface PromoCodeValidationResult {
-  promoCode: { id: string; discountType: PromoCodeDiscountType; discountValue: number };
+  promoCode: {
+    id: string;
+    discountType: PromoCodeDiscountType;
+    discountValue: number;
+  };
   discountedPrice: bigint;
   discountAmount: bigint;
 }
@@ -24,8 +28,11 @@ export class PromoCodesService {
   ) {}
 
   async create(userId: string, eventId: string, dto: CreatePromoCodeDto) {
-    const event = await this.prisma.event.findUnique({ where: { id: eventId } });
-    if (!event) {
+    const event = await this.prisma.event.findUnique({
+      where: { id: eventId },
+    });
+    // #207 — soft-deleted events behave as not-found.
+    if (!event || (event as { deletedAt?: Date | null }).deletedAt) {
       throw new NotFoundException('Event not found');
     }
     await this.organizations.assertMember(event.organizationId, userId);
@@ -53,8 +60,10 @@ export class PromoCodesService {
   }
 
   async listForEvent(userId: string, eventId: string) {
-    const event = await this.prisma.event.findUnique({ where: { id: eventId } });
-    if (!event) {
+    const event = await this.prisma.event.findUnique({
+      where: { id: eventId },
+    });
+    if (!event || (event as { deletedAt?: Date | null }).deletedAt) {
       throw new NotFoundException('Event not found');
     }
     await this.organizations.assertMember(event.organizationId, userId);

@@ -14,9 +14,7 @@ export class PendingTxService {
   ) {}
 
   private get retentionMinutes(): number {
-    const configured = this.config.get<number>(
-      'PENDING_TX_RETENTION_MINUTES',
-    );
+    const configured = this.config.get<number>('PENDING_TX_RETENTION_MINUTES');
     return configured && configured > 0
       ? configured
       : DEFAULT_RETENTION_MINUTES;
@@ -24,9 +22,7 @@ export class PendingTxService {
 
   /** Records intent for a build-transaction flow. Call at the start of a `build*` method. */
   async record(type: string, userId: string, payload: Prisma.InputJsonValue) {
-    const expiresAt = new Date(
-      Date.now() + this.retentionMinutes * 60_000,
-    );
+    const expiresAt = new Date(Date.now() + this.retentionMinutes * 60_000);
     return this.prisma.pendingTx.create({
       data: { type, userId, payload, expiresAt },
     });

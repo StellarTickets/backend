@@ -8,7 +8,7 @@ import {
   Optional,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { ResaleListingStatus, TicketStatus } from '@prisma/client';
+import { Prisma, ResaleListingStatus, TicketStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   ListingInactiveError,
@@ -16,6 +16,7 @@ import {
 } from '../common/errors/domain.error';
 import { OrganizationsService } from '../organizations/organizations.service';
 import { StellarService } from '../stellar/stellar.service';
+import { AuditService } from '../audit/audit.service';
 import { NotificationService } from '../notifications/notifications.service';
 import { OfflineTokenService } from './offline-token.service';
 import { PromoCodesService } from '../promo-codes/promo-codes.service';
@@ -37,6 +38,7 @@ export class TicketsService {
     @Optional() private readonly config?: ConfigService,
     @Optional() private readonly promoCodes?: PromoCodesService,
     @Optional() private readonly gates?: GatesService,
+    @Optional() private readonly audit?: AuditService,
   ) {}
 
   // ---- Organizer-authorized issuance (off-chain payment already settled) ----
@@ -84,27 +86,46 @@ export class TicketsService {
     await this.organizations.assertMember(event.organizationId, userId);
     const toUser = await this.getUserWithWallet(toUserId);
     this.assertRecipientPublicKey(toUser.stellarPublicKey, toPublicKey);
+    // #211 — fail fast on duplicate assigned seats before touching the chain.
+    await this.assertSeatAvailable(event.id, seat);
 
     const { result, txHash } =
       await this.stellar.submitSignedTransaction(signedXdr);
     const chainTicketId = result as bigint;
 
-    return this.prisma.$transaction(async (tx) => {
-      await tx.ticketType.update({
-        where: { id: ticketTypeId },
-        data: { quantityIssued: { increment: 1 } },
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        // #217 — serialize concurrent issuances: lock the TicketType row and
+        // re-check capacity FROM the locked row. The pre-transaction
+        // assertHasCapacity only sees a possibly-stale read.
+        const locked = await tx.$queryRaw<
+          { quantityIssued: number; quantityTotal: number }[]
+        >`SELECT "quantityIssued", "quantityTotal" FROM "TicketType" WHERE "id" = ${ticketTypeId} FOR UPDATE`;
+        const row = locked[0];
+        if (!row) {
+          throw new BadRequestException('Ticket type not found');
+        }
+        this.assertHasCapacity(row.quantityIssued, row.quantityTotal);
+
+        await tx.ticketType.update({
+          where: { id: ticketTypeId },
+          data: { quantityIssued: { increment: 1 } },
+        });
+        return tx.ticket.create({
+          data: {
+            eventId: event.id,
+            ticketTypeId,
+            ownerId: toUserId,
+            chainTicketId,
+            seat: seat ?? 'unassigned',
+            issuedTxHash: txHash,
+          },
+        });
       });
-      return tx.ticket.create({
-        data: {
-          eventId: event.id,
-          ticketTypeId,
-          ownerId: toUserId,
-          chainTicketId,
-          seat: seat ?? 'unassigned',
-          issuedTxHash: txHash,
-        },
-      });
-    });
+    } catch (err) {
+      this.throwOnSeatConflict(err);
+      throw err;
+    }
   }
 
   // ---- Fully on-chain primary sale ----
@@ -153,26 +174,47 @@ export class TicketsService {
     promoCode?: string,
   ) {
     const { event } = await this.getTicketTypeWithEvent(ticketTypeId);
+    // #211 — fail fast on duplicate assigned seats before touching the chain.
+    await this.assertSeatAvailable(event.id, seat);
     const { result, txHash } =
       await this.stellar.submitSignedTransaction(signedXdr);
     const chainTicketId = result as bigint;
 
-    const ticket = await this.prisma.$transaction(async (tx) => {
-      await tx.ticketType.update({
-        where: { id: ticketTypeId },
-        data: { quantityIssued: { increment: 1 } },
+    let ticket;
+    try {
+      ticket = await this.prisma.$transaction(async (tx) => {
+        // #217 — serialize concurrent purchases: lock the TicketType row and
+        // re-check capacity FROM the locked row, so concurrent buyers cannot
+        // both pass the pre-transaction capacity check and oversell
+        // quantityTotal.
+        const locked = await tx.$queryRaw<
+          { quantityIssued: number; quantityTotal: number }[]
+        >`SELECT "quantityIssued", "quantityTotal" FROM "TicketType" WHERE "id" = ${ticketTypeId} FOR UPDATE`;
+        const row = locked[0];
+        if (!row) {
+          throw new BadRequestException('Ticket type not found');
+        }
+        this.assertHasCapacity(row.quantityIssued, row.quantityTotal);
+
+        await tx.ticketType.update({
+          where: { id: ticketTypeId },
+          data: { quantityIssued: { increment: 1 } },
+        });
+        return tx.ticket.create({
+          data: {
+            eventId: event.id,
+            ticketTypeId,
+            ownerId: buyerId,
+            chainTicketId,
+            seat: seat ?? 'unassigned',
+            issuedTxHash: txHash,
+          },
+        });
       });
-      return tx.ticket.create({
-        data: {
-          eventId: event.id,
-          ticketTypeId,
-          ownerId: buyerId,
-          chainTicketId,
-          seat: seat ?? 'unassigned',
-          issuedTxHash: txHash,
-        },
-      });
-    });
+    } catch (err) {
+      this.throwOnSeatConflict(err);
+      throw err;
+    }
     if (promoCode) {
       await this.promoCodes!.redeem(event.id, buyerId, promoCode, ticket.id);
     }
@@ -381,10 +423,15 @@ export class TicketsService {
     const ticket = await this.getTicketWithOrg(ticketId);
     await this.organizations.assertMember(ticket.event.organizationId, userId);
     await this.stellar.submitSignedTransaction(signedXdr);
-    return this.prisma.ticket.update({
+    const revoked = await this.prisma.ticket.update({
       where: { id: ticketId },
       data: { status: TicketStatus.REVOKED },
     });
+    // #209 — audit ticket revocation.
+    await this.audit?.record(userId, 'ticket.revoke', 'Ticket', ticketId, {
+      eventId: ticket.eventId,
+    });
+    return revoked;
   }
 
   async revokeBatch(userId: string, eventId: string, ticketIds: string[]) {
@@ -411,10 +458,16 @@ export class TicketsService {
       );
     }
 
-    return this.prisma.ticket.updateMany({
+    const result = await this.prisma.ticket.updateMany({
       where: { id: { in: ticketIds } },
       data: { status: TicketStatus.REVOKED },
     });
+    // #209 — audit batch revocation (one entry per batch).
+    await this.audit?.record(userId, 'ticket.revoke_batch', 'Event', eventId, {
+      ticketIds,
+      count: result.count,
+    });
+    return result;
   }
 
   private async assertWithinResaleLimit(userId: string) {
@@ -494,6 +547,9 @@ export class TicketsService {
     expiresAt?: string,
   ) {
     await this.assertWithinResaleLimit(userId);
+    // #216 — fail fast when the ticket is already listed before touching the
+    // chain. The DB-level partial unique index remains the source of truth.
+    await this.assertNoActiveResaleListing(ticketId);
     const ticket = await this.getOwnedTicketWithPricingInfo(ticketId, userId);
 
     // #319 — validate price cap at confirm step too (guards against replays)
@@ -505,26 +561,33 @@ export class TicketsService {
 
     const { txHash } = await this.stellar.submitSignedTransaction(signedXdr);
 
-    return this.prisma.$transaction(async (tx) => {
-      await tx.ticket.update({
-        where: { id: ticketId },
-        data: { status: TicketStatus.RESALE },
-      });
-      return tx.resaleListing.create({
-        data: {
-          ticketId,
-          sellerId: userId,
-          price: BigInt(price),
-          txHash,
-          expiresAt: expiresAt ? new Date(expiresAt) : null,
-          priceHistory: {
-            create: {
-              price: BigInt(price),
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        await tx.ticket.update({
+          where: { id: ticketId },
+          data: { status: TicketStatus.RESALE },
+        });
+        return tx.resaleListing.create({
+          data: {
+            ticketId,
+            sellerId: userId,
+            price: BigInt(price),
+            txHash,
+            expiresAt: expiresAt ? new Date(expiresAt) : null,
+            priceHistory: {
+              create: {
+                price: BigInt(price),
+              },
             },
           },
-        },
+        });
       });
-    });
+    } catch (err) {
+      // #216 — a concurrent create raced us past the pre-check: the partial
+      // unique index rejected it, surface it as a 409.
+      this.throwOnResaleConflict(err);
+      throw err;
+    }
   }
 
   async updateResalePrice(userId: string, listingId: string, newPrice: string) {
@@ -711,9 +774,10 @@ export class TicketsService {
     return { items: enrichedItems, nextCursor, limit: take };
   }
 
-  findMine(userId: string) {
+  findMine(userId: string, status?: TicketStatus) {
+    // #213 — (ownerId, status) is covered by "Ticket_ownerId_status_idx".
     return this.prisma.ticket.findMany({
-      where: { ownerId: userId },
+      where: { ownerId: userId, ...(status ? { status } : {}) },
       include: { event: true, ticketType: true },
       orderBy: { createdAt: 'desc' },
     });
@@ -820,6 +884,84 @@ export class TicketsService {
   private assertHasCapacity(issued: number, total: number) {
     if (issued >= total) {
       throw new TicketTypeSoldOutError();
+    }
+  }
+
+  /**
+   * #211 — application-level guard mirroring the partial unique index
+   * `Ticket_eventId_seat_partial_key` (eventId, seat WHERE seat <> 'unassigned').
+   * The DB remains the source of truth; this check only produces a nicer
+   * 409 before the chain round-trip.
+   */
+  private async assertSeatAvailable(eventId: string, seat?: string) {
+    const normalized = seat?.trim() ?? 'unassigned';
+    if (!normalized || normalized === 'unassigned') return;
+    const existing = await this.prisma.ticket.findFirst({
+      where: { eventId, seat: normalized },
+      select: { id: true },
+    });
+    if (existing) {
+      throw new ConflictException(
+        'That seat has already been issued for this event',
+      );
+    }
+  }
+
+  /** Translates a partial-index violation into a 409. */
+  private throwOnSeatConflict(err: unknown): void {
+    if (
+      err instanceof Prisma.PrismaClientKnownRequestError &&
+      err.code === 'P2002'
+    ) {
+      const target = (err.meta as { target?: unknown } | undefined)?.target;
+      const targets = Array.isArray(target)
+        ? target.join(',')
+        : typeof target === 'string'
+          ? target
+          : '';
+      if (targets.includes('seat') || targets.includes('Ticket_eventId_seat')) {
+        throw new ConflictException(
+          'That seat has already been issued for this event',
+        );
+      }
+    }
+  }
+
+  /**
+   * #216 — application-level guard mirroring the partial unique index
+   * `ResaleListing_ticketId_active_key` (ticketId WHERE status = 'ACTIVE').
+   * The DB remains the source of truth; this check only produces a nicer
+   * 409 before the chain round-trip.
+   */
+  private async assertNoActiveResaleListing(ticketId: string) {
+    const existing = await this.prisma.resaleListing.findFirst({
+      where: { ticketId, status: ResaleListingStatus.ACTIVE },
+      select: { id: true },
+    });
+    if (existing) {
+      throw new ConflictException(
+        'This ticket already has an active resale listing',
+      );
+    }
+  }
+
+  /** Translates the active-listing partial-index violation into a 409. */
+  private throwOnResaleConflict(err: unknown): void {
+    if (
+      err instanceof Prisma.PrismaClientKnownRequestError &&
+      err.code === 'P2002'
+    ) {
+      const target = (err.meta as { target?: unknown } | undefined)?.target;
+      const targets = Array.isArray(target)
+        ? target.join(',')
+        : typeof target === 'string'
+          ? target
+          : '';
+      if (targets.includes('ResaleListing_ticketId_active')) {
+        throw new ConflictException(
+          'This ticket already has an active resale listing',
+        );
+      }
     }
   }
 

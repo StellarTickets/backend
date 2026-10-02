@@ -13,6 +13,7 @@ import {
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import type { CurrentUserPayload } from '../auth/decorators/current-user.decorator';
+import { TicketStatus } from '@prisma/client';
 import { ScanRateLimitGuard } from '../common/guards/scan-rate-limit.guard';
 import { IdempotencyInterceptor } from '../common/interceptors/idempotency.interceptor';
 import { TicketsService } from './tickets.service';
@@ -53,8 +54,11 @@ export class TicketsController {
   }
 
   @Get('mine')
-  findMine(@CurrentUser() user: CurrentUserPayload) {
-    return this.ticketsService.findMine(user.userId);
+  findMine(
+    @CurrentUser() user: CurrentUserPayload,
+    @Query('status') status?: TicketStatus,
+  ) {
+    return this.ticketsService.findMine(user.userId, status);
   }
 
   @Get('verify/:qrSecret')

@@ -3,7 +3,7 @@ import { IsBigIntString } from './is-bigint-string.decorator';
 
 class TestDto {
   @IsBigIntString()
-  price: string;
+  price!: string;
 }
 
 describe('IsBigIntString', () => {

@@ -1,11 +1,14 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Header,
   Param,
   Post,
+  Query,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
@@ -14,6 +17,8 @@ import { EventsService } from './events.service';
 import { CreateEventDto } from './dto/create-event.dto';
 import { CreateTicketTypeDto } from './dto/create-ticket-type.dto';
 import { ConfirmPublishDto } from './dto/confirm-publish.dto';
+import { ListOrganizationEventsQueryDto } from './dto/list-organization-events-query.dto';
+import { ResponseCacheInterceptor } from '../common/interceptors/response-cache.interceptor';
 
 @Controller()
 export class EventsController {
@@ -21,11 +26,13 @@ export class EventsController {
 
   @Get('events')
   @Header('Cache-Control', 'public, max-age=60, s-maxage=300')
+  @UseInterceptors(ResponseCacheInterceptor)
   findPublished() {
     return this.eventsService.findPublished();
   }
 
   @Get('events/:eventId')
+  @UseInterceptors(ResponseCacheInterceptor)
   findOne(@Param('eventId') eventId: string) {
     return this.eventsService.getWithOrg(eventId);
   }
@@ -35,8 +42,13 @@ export class EventsController {
   findForOrganization(
     @CurrentUser() user: CurrentUserPayload,
     @Param('organizationId') organizationId: string,
+    @Query() query: ListOrganizationEventsQueryDto,
   ) {
-    return this.eventsService.findForOrganization(user.userId, organizationId);
+    return this.eventsService.findForOrganization(
+      user.userId,
+      organizationId,
+      query,
+    );
   }
 
   @Post('organizations/:organizationId/events')
@@ -89,5 +101,23 @@ export class EventsController {
       eventId,
       dto.signedXdr,
     );
+  }
+
+  @Delete('events/:eventId')
+  @UseGuards(JwtAuthGuard)
+  softDelete(
+    @CurrentUser() user: CurrentUserPayload,
+    @Param('eventId') eventId: string,
+  ) {
+    return this.eventsService.softDelete(user.userId, eventId);
+  }
+
+  @Post('events/:eventId/restore')
+  @UseGuards(JwtAuthGuard)
+  restore(
+    @CurrentUser() user: CurrentUserPayload,
+    @Param('eventId') eventId: string,
+  ) {
+    return this.eventsService.restore(user.userId, eventId);
   }
 }
