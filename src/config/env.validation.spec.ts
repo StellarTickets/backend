@@ -7,7 +7,7 @@ function validConfig(overrides: Record<string, unknown> = {}) {
     PORT: 3000,
     DATABASE_URL: 'postgresql://user:pass@localhost:5432/db',
     JWT_SECRET: 'x'.repeat(32),
-    APP_URL: 'http://localhost:3001',
+    CORS_ORIGINS: 'http://localhost:3001,https://staging.example.com',
     SOROBAN_RPC_URL: 'https://soroban-testnet.stellar.org',
     STELLAR_NETWORK: 'testnet',
     TICKETING_CONTRACT_ID: 'C'.repeat(56),
@@ -53,9 +53,182 @@ describe('env.validate', () => {
     );
   });
 
+  it('defaults to the in-memory rate-limit store without a REDIS_URL', () => {
+    expect(() =>
+      validate(validConfig({ RATE_LIMIT_STORE: 'memory' })),
+    ).not.toThrow();
+  });
+
+  it('accepts the redis rate-limit store when REDIS_URL is set', () => {
+    expect(() =>
+      validate(
+        validConfig({
+          RATE_LIMIT_STORE: 'redis',
+          REDIS_URL: 'redis://localhost:6379',
+        }),
+      ),
+    ).not.toThrow();
+  });
+
+  it('requires REDIS_URL when the rate-limit store is redis', () => {
+    expect(() =>
+      validate(validConfig({ RATE_LIMIT_STORE: 'redis' })),
+    ).toThrow();
+  });
+
+  it('rejects an unrecognized RATE_LIMIT_STORE', () => {
+    expect(() =>
+      validate(validConfig({ RATE_LIMIT_STORE: 'memcached' })),
+    ).toThrow();
+  });
+
+  it('defaults to the in-memory cache without a REDIS_URL', () => {
+    expect(() =>
+      validate(validConfig({ CACHE_DRIVER: 'memory' })),
+    ).not.toThrow();
+  });
+
+  it('accepts the redis cache driver when REDIS_URL is set', () => {
+    expect(() =>
+      validate(
+        validConfig({
+          CACHE_DRIVER: 'redis',
+          REDIS_URL: 'redis://localhost:6379',
+        }),
+      ),
+    ).not.toThrow();
+  });
+
+  it('requires REDIS_URL when the cache driver is redis', () => {
+    expect(() => validate(validConfig({ CACHE_DRIVER: 'redis' }))).toThrow();
+  });
+
+  it('rejects an unrecognized CACHE_DRIVER', () => {
+    expect(() =>
+      validate(validConfig({ CACHE_DRIVER: 'memcached' })),
+    ).toThrow();
+  });
+
+  it('leaves the webhook queue off, and Redis optional, by default', () => {
+    expect(() => validate(validConfig())).not.toThrow();
+    expect(() =>
+      validate(validConfig({ WEBHOOK_QUEUE_ENABLED: 'false' })),
+    ).not.toThrow();
+  });
+
+  it('requires REDIS_URL when the webhook queue is enabled', () => {
+    expect(() =>
+      validate(validConfig({ WEBHOOK_QUEUE_ENABLED: 'true' })),
+    ).toThrow();
+  });
+
+  it('accepts an enabled webhook queue with a REDIS_URL and retry tuning', () => {
+    expect(() =>
+      validate(
+        validConfig({
+          WEBHOOK_QUEUE_ENABLED: 'true',
+          REDIS_URL: 'redis://localhost:6379',
+          WEBHOOK_QUEUE_ATTEMPTS: '8',
+          WEBHOOK_QUEUE_BACKOFF_MS: '250',
+        }),
+      ),
+    ).not.toThrow();
+  });
+
+  it('keeps WEBHOOK_QUEUE_ENABLED=false as the string "false"', () => {
+    const validated = validate(validConfig({ WEBHOOK_QUEUE_ENABLED: 'false' }));
+
+    expect(validated.WEBHOOK_QUEUE_ENABLED).toBe('false');
+  });
+
+  it('rejects a non-boolean WEBHOOK_QUEUE_ENABLED', () => {
+    expect(() =>
+      validate(validConfig({ WEBHOOK_QUEUE_ENABLED: 'yes' })),
+    ).toThrow();
+  });
+
+  it('rejects a non-integer WEBHOOK_QUEUE_ATTEMPTS', () => {
+    expect(() =>
+      validate(validConfig({ WEBHOOK_QUEUE_ATTEMPTS: 'many' })),
+    ).toThrow();
+  });
+
+  it.each(['true', 'false'])('accepts SCHEDULER_ENABLED=%s', (value) => {
+    expect(() =>
+      validate(validConfig({ SCHEDULER_ENABLED: value })),
+    ).not.toThrow();
+  });
+
+  it('rejects a non-boolean SCHEDULER_ENABLED', () => {
+    expect(() => validate(validConfig({ SCHEDULER_ENABLED: 'off' }))).toThrow();
+  });
+
+  it('accepts optional tracing configuration and rejects invalid flags', () => {
+    expect(() =>
+      validate(validConfig({ OTEL_TRACING_ENABLED: 'true' })),
+    ).not.toThrow();
+    expect(() =>
+      validate(validConfig({ OTEL_TRACING_ENABLED: 'false' })),
+    ).not.toThrow();
+    expect(() =>
+      validate(validConfig({ OTEL_TRACING_ENABLED: 'yes' })),
+    ).toThrow();
+  });
+
   it('rejects a missing required field', () => {
     const config = validConfig();
     delete (config as Record<string, unknown>).DATABASE_URL;
     expect(() => validate(config)).toThrow();
+  });
+
+  describe('CORS_ORIGINS', () => {
+    it('accepts comma-separated origins', () => {
+      expect(() =>
+        validate(
+          validConfig({
+            CORS_ORIGINS: 'https://app.example.com,https://staging.example.com',
+          }),
+        ),
+      ).not.toThrow();
+    });
+
+    it('accepts single origin', () => {
+      expect(() =>
+        validate(validConfig({ CORS_ORIGINS: 'https://app.example.com' })),
+      ).not.toThrow();
+    });
+
+    it('rejects wildcard in production', () => {
+      expect(() =>
+        validate(
+          validConfig({
+            NODE_ENV: 'production',
+            CORS_ORIGINS: '*',
+          }),
+        ),
+      ).toThrow('wildcard (*) is not allowed in production');
+    });
+
+    it('accepts wildcard in development', () => {
+      expect(() =>
+        validate(
+          validConfig({
+            NODE_ENV: 'development',
+            CORS_ORIGINS: '*',
+          }),
+        ),
+      ).not.toThrow();
+    });
+
+    it('accepts wildcard in test', () => {
+      expect(() =>
+        validate(
+          validConfig({
+            NODE_ENV: 'test',
+            CORS_ORIGINS: '*',
+          }),
+        ),
+      ).not.toThrow();
+    });
   });
 });

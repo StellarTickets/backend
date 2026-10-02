@@ -1,4 +1,7 @@
-import type { PaginationQueryDto } from '../dto/pagination-query.dto';
+import {
+  DEFAULT_PAGE_LIMIT,
+  type PaginationQueryDto,
+} from '../dto/pagination-query.dto';
 
 /** Response body shared by every offset-paginated listing endpoint. */
 export interface Paginated<T> {
@@ -14,7 +17,10 @@ export interface Paginated<T> {
 type PageParams = Pick<PaginationQueryDto, 'page' | 'limit'>;
 
 /** Prisma `skip` / `take` for the requested page. */
-export function toSkipTake({ page, limit }: PageParams): {
+export function toSkipTake({
+  page = 1,
+  limit = DEFAULT_PAGE_LIMIT,
+}: PageParams): {
   skip: number;
   take: number;
 } {
@@ -24,7 +30,7 @@ export function toSkipTake({ page, limit }: PageParams): {
 export function paginate<T>(
   items: T[],
   total: number,
-  { page, limit }: PageParams,
+  { page = 1, limit = DEFAULT_PAGE_LIMIT }: PageParams,
 ): Paginated<T> {
   return { items, total, page, limit };
 }

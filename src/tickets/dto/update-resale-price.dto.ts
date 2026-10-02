@@ -1,7 +1,7 @@
-import { IsString } from 'class-validator';
+import { IsBigIntString } from '../../common/decorators/is-bigint-string.decorator';
 
 export class UpdateResalePriceDto {
   /** Updated asking price in settlement token smallest units. */
-  @IsString()
-  price: string;
+  @IsBigIntString()
+  price!: string;
 }

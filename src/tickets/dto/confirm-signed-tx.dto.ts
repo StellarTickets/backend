@@ -3,7 +3,7 @@ import { IsOptional, IsString, Matches } from 'class-validator';
 /** Base shape for every "confirm" endpoint that relays a wallet-signed XDR envelope. */
 export class ConfirmSignedTxDto {
   @IsString()
-  signedXdr: string;
+  signedXdr!: string;
 
   /** Optional 64-char hex transaction hash when the client already knows it. */
   @IsOptional()

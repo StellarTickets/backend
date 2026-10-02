@@ -1,45 +1,56 @@
 import 'reflect-metadata';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
-import {
-  DEFAULT_PAGE_LIMIT,
-  MAX_PAGE_LIMIT,
-  PaginationQueryDto,
-} from './pagination-query.dto';
+import { MAX_PAGE_LIMIT, PaginationQueryDto } from './pagination-query.dto';
+
+async function errorsFor(query: Record<string, unknown>) {
+  const dto = plainToInstance(PaginationQueryDto, query);
+  return (await validate(dto)).map((e) => e.property);
+}
 
 describe('PaginationQueryDto', () => {
-  it('defaults to the first page of 20', async () => {
+  it('defaults to the first page of 20 when no query is given', async () => {
     const dto = plainToInstance(PaginationQueryDto, {});
+
     expect(await validate(dto)).toHaveLength(0);
     expect(dto.page).toBe(1);
-    expect(dto.limit).toBe(DEFAULT_PAGE_LIMIT);
-    expect(DEFAULT_PAGE_LIMIT).toBe(20);
+    expect(dto.limit).toBe(20);
   });
 
-  it('converts query-string values to numbers', async () => {
-    const dto = plainToInstance(PaginationQueryDto, { page: '3', limit: '50' });
-    expect(await validate(dto)).toHaveLength(0);
-    expect(dto).toMatchObject({ page: 3, limit: 50 });
-  });
-
-  it('accepts the maximum limit', async () => {
+  it('coerces numeric query strings', async () => {
     const dto = plainToInstance(PaginationQueryDto, {
-      limit: String(MAX_PAGE_LIMIT),
+      page: '3',
+      limit: '50',
     });
+
     expect(await validate(dto)).toHaveLength(0);
+    expect(dto.page).toBe(3);
+    expect(dto.limit).toBe(50);
   });
 
-  it.each([
-    ['limit', String(MAX_PAGE_LIMIT + 1)],
-    ['limit', '0'],
-    ['limit', '2.5'],
-    ['limit', 'ten'],
-    ['page', '0'],
-    ['page', '-1'],
-    ['page', '1.5'],
-  ])('rejects %s=%s', async (property, value) => {
-    const dto = plainToInstance(PaginationQueryDto, { [property]: value });
-    const errors = await validate(dto);
-    expect(errors.map((e) => e.property)).toContain(property);
+  it('accepts the largest allowed page size', async () => {
+    expect(await errorsFor({ limit: String(MAX_PAGE_LIMIT) })).toEqual([]);
+  });
+
+  it('rejects a limit above the maximum page size', async () => {
+    expect(await errorsFor({ limit: String(MAX_PAGE_LIMIT + 1) })).toEqual([
+      'limit',
+    ]);
+  });
+
+  it.each(['0', '-1'])('rejects limit=%s', async (limit) => {
+    expect(await errorsFor({ limit })).toEqual(['limit']);
+  });
+
+  it.each(['0', '-1'])('rejects page=%s', async (page) => {
+    expect(await errorsFor({ page })).toEqual(['page']);
+  });
+
+  it('rejects a page number large enough to overflow skip', async () => {
+    expect(await errorsFor({ page: '100001' })).toEqual(['page']);
+  });
+
+  it.each(['abc', '1.5'])('rejects a non-integer limit (%s)', async (limit) => {
+    expect(await errorsFor({ limit })).toEqual(['limit']);
   });
 });

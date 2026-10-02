@@ -1,4 +1,4 @@
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
   IsDate,
   IsEnum,
@@ -6,28 +6,48 @@ import {
   IsOptional,
   IsString,
   Max,
+  MaxLength,
   Min,
+  MinDate,
   MinLength,
 } from 'class-validator';
 import { Industry } from '@prisma/client';
 
+/**
+ * How far in the past `startsAt` may be before it's rejected. Absorbs client
+ * clock skew and the time between a form being filled and submitted, so an
+ * event starting "now" isn't bounced.
+ */
+export const STARTS_AT_PAST_TOLERANCE_MS = 60_000;
+
 export class CreateEventDto {
+  @Transform(({ value }: { value: unknown }) =>
+    typeof value === 'string' ? value.trim() : value,
+  )
   @IsString()
   @MinLength(2)
-  name: string;
+  @MaxLength(256)
+  name!: string;
 
   @IsEnum(Industry, {
     message: `category must be one of: ${Object.values(Industry).join(', ')}`,
   })
-  category: Industry;
+  category!: Industry;
 
+  @Transform(({ value }: { value: unknown }) =>
+    typeof value === 'string' ? value.trim() : value,
+  )
   @IsString()
   @MinLength(1)
-  venue: string;
+  @MaxLength(256)
+  venue!: string;
 
   @Type(() => Date)
   @IsDate()
-  startsAt: Date;
+  @MinDate(() => new Date(Date.now() - STARTS_AT_PAST_TOLERANCE_MS), {
+    message: 'startsAt must not be in the past',
+  })
+  startsAt!: Date;
 
   @IsOptional()
   @Type(() => Date)

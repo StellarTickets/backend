@@ -32,7 +32,7 @@ describe('TransferTicketDto', () => {
   it('rejects a bad recipient public key', async () => {
     const dto = plainToInstance(TransferTicketDto, {
       toUserId: UUID,
-      toPublicKey: 'G' + 'A' * 55,
+      toPublicKey: 'G' + 'A'.repeat(55),
     });
     const errors = await validate(dto);
     expect(errors.some((e) => e.property === 'toPublicKey')).toBe(true);

@@ -1,6 +1,7 @@
-import { ValidationPipe } from '@nestjs/common';
+import { ValidationPipe, VersioningType } from '@nestjs/common';
 import type { ConfigService } from '@nestjs/config';
 import type { NestExpressApplication } from '@nestjs/platform-express';
+import { json } from 'express';
 import helmet from 'helmet';
 import { parseTrustProxy } from './config/trust-proxy';
 
@@ -19,11 +20,34 @@ export function configureApp(
   // If-None-Match with 304 Not Modified. See docs/API.md.
   app.set('etag', 'weak');
 
-  app.use(helmet());
+  const cspDirectives = config.get<string>('CSP_DIRECTIVES');
+  const helmetOptions: Record<string, unknown> = {};
+  if (cspDirectives) {
+    try {
+      helmetOptions.contentSecurityPolicy = {
+        directives: JSON.parse(cspDirectives) as Record<string, string[]>,
+      };
+    } catch {
+      helmetOptions.contentSecurityPolicy = true;
+    }
+  }
+  app.use(helmet(helmetOptions));
+
+  app.use(json({ limit: config.get<string>('JSON_BODY_LIMIT', '100kb') }));
+
   app.enableCors({
-    origin: config.getOrThrow<string>('APP_URL'),
+    origin: config
+      .getOrThrow<string>('CORS_ORIGINS')
+      .split(',')
+      .map((o) => o.trim()),
     credentials: true,
   });
+
+  app.enableVersioning({
+    type: VersioningType.URI,
+    defaultVersion: '1',
+  });
+
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,

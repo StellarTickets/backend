@@ -39,4 +39,19 @@ describe('CreateOrganizationDto', () => {
     const errors = await validate(build({ stellarAccount: 'not-valid' }));
     expect(errors.some((e) => e.property === 'stellarAccount')).toBe(true);
   });
+
+  it('accepts optional organization branding URLs', async () => {
+    const errors = await validate(
+      build({
+        logoUrl: 'https://example.com/logo.png',
+        websiteUrl: 'https://example.com',
+      }),
+    );
+    expect(errors).toHaveLength(0);
+  });
+
+  it.each(['logoUrl', 'websiteUrl'])('rejects an invalid %s', async (field) => {
+    const errors = await validate(build({ [field]: 'not-a-url' }));
+    expect(errors.some((e) => e.property === field)).toBe(true);
+  });
 });

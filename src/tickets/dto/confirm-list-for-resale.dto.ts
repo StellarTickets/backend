@@ -4,7 +4,7 @@ import { ConfirmSignedTxDto } from './confirm-signed-tx.dto';
 
 export class ConfirmListForResaleDto extends ConfirmSignedTxDto {
   @IsBigIntString()
-  price: string;
+  price!: string;
 
   @IsOptional()
   @IsDateString()

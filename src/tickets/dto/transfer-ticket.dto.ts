@@ -3,9 +3,9 @@ import { IsStellarPublicKey } from '../../common/decorators/is-stellar-public-ke
 
 export class TransferTicketDto {
   @IsUUID()
-  toUserId: string;
+  toUserId!: string;
 
   /** Recipient wallet; checked before the build-tx call. */
   @IsStellarPublicKey()
-  toPublicKey: string;
+  toPublicKey!: string;
 }

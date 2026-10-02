@@ -3,11 +3,39 @@
 ## Development setup
 
 ```bash
-npm install
+npm install      # also runs `husky` via the `prepare` script — installs the pre-commit hook
 cp .env.example .env
 npx prisma migrate dev
 npm run start:dev
 ```
+
+## Pre-commit hook (husky + lint-staged)
+
+A [husky](https://typicode.github.io/husky/) pre-commit hook runs
+[lint-staged](https://github.com/lint-staged/lint-staged) automatically
+whenever you commit. It applies ESLint (`--fix`) and Prettier to every
+staged `.ts` file, so formatting issues never reach a PR.
+
+The hook is installed by `npm install` via the `prepare` lifecycle script.
+If you cloned the repo without running `npm install` first, or you need to
+reinstall the hook manually, run:
+
+```bash
+npx husky
+```
+
+The hook configuration lives in `.husky/pre-commit` and the
+`lint-staged` key in `package.json`.
+
+To bypass the hook for an exceptional commit (e.g. a work-in-progress
+checkpoint), use:
+
+```bash
+git commit --no-verify -m "wip: ..."
+```
+
+Use `--no-verify` sparingly — CI will still enforce lint and formatting
+on every PR.
 
 ## Before opening a PR
 

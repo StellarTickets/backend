@@ -1,3 +1,4 @@
+import 'reflect-metadata';
 import { paginate, toSkipTake } from './paginated';
 
 describe('toSkipTake', () => {
