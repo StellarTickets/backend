@@ -6,6 +6,10 @@ services return. When they drift, the generated Bruno collection under
 [`bruno/`](bruno/README.md) fails CI, so treat this file and that
 collection as two views of the same source.
 
+Paths are shown without a prefix. When `API_PREFIX` is set (e.g.
+`api/v1`), every route except `GET /health` is served under it — see
+`docs/CONFIGURATION.md`.
+
 The examples assume:
 
 ```bash

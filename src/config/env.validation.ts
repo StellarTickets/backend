@@ -4,10 +4,15 @@ import {
   IsInt,
   IsOptional,
   IsString,
+  Matches,
   MinLength,
   ValidateIf,
   validateSync,
 } from 'class-validator';
+import { API_PREFIX_PATTERN } from './api-prefix';
+import { getJwtSecretProblems, JWT_SECRET_MIN_LENGTH } from './jwt-secret';
+import { SECRET_PROVIDER_KINDS } from './secrets/secret-provider';
+import { getRpcNetworkProblems, STELLAR_NETWORKS } from './stellar-networks';
 
 class EnvironmentVariables {
   /// Which NestJS environment the app runs in. Drives logging verbosity and
@@ -35,6 +40,14 @@ class EnvironmentVariables {
   /// when running the API in a container.
   @IsInt()
   PORT!: number;
+
+  /// Optional path every route is mounted under (e.g. `api/v1`), for hosting
+  /// behind a reverse-proxy path. Health routes stay at the root.
+  @IsOptional()
+  @Matches(API_PREFIX_PATTERN, {
+    message: 'API_PREFIX must be URL path segments such as "api" or "api/v1"',
+  })
+  API_PREFIX?: string;
 
   /// Soft cap on how many `ACTIVE` resale listings one seller may hold at
   /// once. Listing beyond it is rejected, not queued. See docs/RESALE_EXPIRY.md.
@@ -102,12 +115,23 @@ class EnvironmentVariables {
   @IsString()
   REDIS_URL?: string;
 
-  /// Secret used to sign and verify JWT access tokens. Must be at least 32
-  /// characters. Rotating it invalidates every issued token. See
-  /// docs/AUTHENTICATION.md.
+  /// Where secrets such as JWT_SECRET are read from: `env` (default),
+  /// `file` (`<KEY>_FILE` paths) or `custom` (a provider passed to
+  /// `SecretsModule.forRoot`). See docs/CONFIGURATION.md.
+  @IsOptional()
+  @IsIn(SECRET_PROVIDER_KINDS)
+  SECRETS_PROVIDER?: string;
+
+  /// Required when SECRETS_PROVIDER is `env` (the default).
+  @ValidateIf((o: EnvironmentVariables) => secretsProvider(o) === 'env')
   @IsString()
-  @MinLength(32)
-  JWT_SECRET!: string;
+  @MinLength(JWT_SECRET_MIN_LENGTH)
+  JWT_SECRET?: string;
+
+  /// Path of the file holding JWT_SECRET; required when SECRETS_PROVIDER=file.
+  @ValidateIf((o: EnvironmentVariables) => secretsProvider(o) === 'file')
+  @IsString()
+  JWT_SECRET_FILE?: string;
 
   /// Comma-separated list of allowed CORS origins (e.g. "https://app.example.com,https://staging.example.com").
   /// Wildcard (*) is NOT allowed in production. Used as the CORS allow-list
@@ -133,8 +157,7 @@ class EnvironmentVariables {
 
   /// Which Stellar network every contract call targets. Must match the network
   /// the `ticketing` contract is deployed on and the one user wallets are set
-  /// to, or every submit will fail.
-  @IsIn(['testnet', 'futurenet', 'mainnet'])
+  @IsIn(STELLAR_NETWORKS)
   STELLAR_NETWORK!: string;
 
   /// Deployed `ticketing` contract's C... address.
@@ -180,6 +203,24 @@ class EnvironmentVariables {
   IDEMPOTENCY_KEY_TTL_MINUTES?: number;
 }
 
+function secretsProvider(env: EnvironmentVariables): string {
+  return env.SECRETS_PROVIDER ?? 'env';
+}
+
+/** Checks that span several variables, run once each field is well-formed. */
+function crossFieldProblems(env: EnvironmentVariables): string[] {
+  const problems = getRpcNetworkProblems(
+    env.SOROBAN_RPC_URL,
+    env.STELLAR_NETWORK,
+  );
+  // Secrets resolved through another provider are checked when the provider
+  // resolves them (see src/auth/jwt-secret.module.ts).
+  if (secretsProvider(env) === 'env' && env.JWT_SECRET !== undefined) {
+    problems.push(...getJwtSecretProblems(env.JWT_SECRET, env.NODE_ENV));
+  }
+  return problems;
+}
+
 export function validate(config: Record<string, unknown>) {
   const validated = plainToInstance(EnvironmentVariables, config, {
     enableImplicitConversion: true,
@@ -188,6 +229,13 @@ export function validate(config: Record<string, unknown>) {
 
   if (errors.length > 0) {
     throw new Error(`Invalid environment configuration: ${errors.toString()}`);
+  }
+
+  const problems = crossFieldProblems(validated);
+  if (problems.length > 0) {
+    throw new Error(
+      `Invalid environment configuration: ${problems.join('; ')}`,
+    );
   }
 
   const corsOrigins = validated.CORS_ORIGINS.split(',').map((o) => o.trim());

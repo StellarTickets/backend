@@ -12,6 +12,7 @@ async function bootstrap() {
     { default: helmet },
     { DocumentBuilder, SwaggerModule },
     { GlobalExceptionFilter },
+    { applyApiPrefix },
   ] = await Promise.all([
     import('@nestjs/core'),
     import('./app.module.js'),
@@ -20,11 +21,13 @@ async function bootstrap() {
     import('helmet'),
     import('@nestjs/swagger'),
     import('./common/filters/global-exception.filter.js'),
+    import('./config/api-prefix.js'),
   ]);
   const app = await NestFactory.create(AppModule);
   if (tracing) app.enableShutdownHooks();
   const config = app.get(ConfigService);
 
+  applyApiPrefix(app, config.get<string>('API_PREFIX'));
   const cspDirectives = config.get<string>('CSP_DIRECTIVES');
   const helmetOptions: Record<string, unknown> = {};
   if (cspDirectives) {

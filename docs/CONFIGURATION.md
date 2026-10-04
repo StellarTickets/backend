@@ -8,6 +8,81 @@ run with a missing or malformed value. See
 [`docs/NON_CUSTODIAL.md`](NON_CUSTODIAL.md) for what `JWT_SECRET` and
 `PLATFORM_SIGNER_SECRET` are actually used for.
 
+## Checks beyond per-variable format
+
+Besides each variable's own format, `validate()` refuses to start when:
+
+- **`JWT_SECRET` is weak.** Every environment requires at least 32
+  characters. With `NODE_ENV=production` the secret must also contain at
+  least 10 distinct characters and must not look like a placeholder: after
+  lower-casing and removing punctuation, it may not contain `changeme`,
+  `replaceme`, `yoursecret`, `jwtsecret`, `secretkey`, `mysecret`,
+  `placeholder`, `example`, `default`, `insecure`, `donotuse` or `password`.
+  Generate one with `openssl rand -base64 48`. The same rules apply to a
+  secret loaded through a [secret provider](#secret-providers).
+- **`SOROBAN_RPC_URL` and `STELLAR_NETWORK` disagree.** The network
+  passphrase that transactions are signed with comes from `STELLAR_NETWORK`.
+  The app can't reach the RPC at boot, so it infers the RPC's network from
+  its URL instead: a host or path segment named `testnet`, `futurenet`,
+  `mainnet` or `pubnet` (for example `soroban-testnet.stellar.org` or
+  `rpc-futurenet.stellar.org`). If that network differs from
+  `STELLAR_NETWORK`, startup fails. URLs that name no network, or more than
+  one, pass this check; that covers self-hosted or local nodes such as
+  `http://localhost:8000/soroban/rpc`. `SOROBAN_RPC_URL` must be an `http`
+  or `https` URL.
+
+## API path prefix
+
+Set `API_PREFIX` (for example `api` or `api/v1`) to serve every route under
+that path when the API is hosted behind a reverse proxy at a sub-path. With
+`API_PREFIX=api/v1`, `POST /auth/login` becomes `POST /api/v1/auth/login`.
+`GET /health` stays at the root so load-balancer and orchestrator probes
+don't have to change. Leave it unset or empty to keep the current root
+paths. Leading and trailing slashes are ignored. Only URL-safe path segments
+are accepted, and `.` or `..` segments are rejected.
+
+## Secret providers
+
+`JWT_SECRET` is read through a pluggable `SecretProvider`
+(`src/config/secrets/secret-provider.ts`), chosen with `SECRETS_PROVIDER`:
+
+| `SECRETS_PROVIDER` | Reads `JWT_SECRET` from | Required variables |
+|---|---|---|
+| `env` (default) | the `JWT_SECRET` environment variable | `JWT_SECRET` |
+| `file` | the file at `JWT_SECRET_FILE`, with surrounding whitespace trimmed | `JWT_SECRET_FILE` |
+| `custom` | the provider passed to `SecretsModule.forRoot({ provider })` | — |
+
+`file` works with Docker and Kubernetes secrets, and with secrets-manager
+sidecars that mount values as files, such as Vault Agent or the AWS and GCP
+Secrets Store CSI drivers. With `file`, the secret never has to be in the
+process environment.
+
+To read the secret straight from a secrets manager instead, implement the
+interface and register the class in `src/app.module.ts`:
+
+```ts
+@Injectable()
+export class VaultSecretProvider implements SecretProvider {
+  readonly name = 'vault';
+
+  constructor(private readonly config: ConfigService) {}
+
+  async getSecret(key: string): Promise<string | undefined> {
+    // Fetch `key` from your secrets manager here.
+  }
+}
+
+// app.module.ts
+SecretsModule.forRoot({ provider: VaultSecretProvider }),
+```
+
+Then start the app with `SECRETS_PROVIDER=custom`. The secret is resolved
+once at boot (`src/auth/jwt-secret.module.ts`) and is used both to sign
+tokens (`JwtModule`) and to verify them (`JwtStrategy`). If the secret is
+missing, or fails the strength rules above, the app doesn't start. Rotating
+the secret requires a restart, and a restart invalidates tokens already
+issued.
+
 ## Environment variables
 
 <!-- BEGIN GENERATED: env table (npm run docs:env) -->
@@ -19,6 +94,7 @@ run with a missing or malformed value. See
 | `OTEL_SERVICE_NAME` | string | optional | `stellar-tickets-backend` \* | yes | Service name attached to exported spans; defaults to stellar-tickets-backend.
 | `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | string | optional | `http://localhost:4318/v1/traces` \* | yes | OTLP HTTP trace collector URL. Defaults to http://localhost:4318/v1/traces.
 | `PORT` | integer | **required** | `3000` | yes | TCP port the HTTP server binds. Match it to the `port` in docker-compose.yml when running the API in a container.
+| `API_PREFIX` | — | optional | — | yes | Optional path every route is mounted under (e.g. `api/v1`), for hosting behind a reverse-proxy path. Health routes stay at the root.
 | `MAX_ACTIVE_RESALE_LISTINGS_PER_USER` | integer | optional | `5` | yes | Soft cap on how many `ACTIVE` resale listings one seller may hold at once. Listing beyond it is rejected, not queued. See docs/RESALE_EXPIRY.md.
 | `DATABASE_URL` | string | **required** | — | yes | PostgreSQL connection string for the Prisma client. This is the single system of record; see docs/DATABASE.md.
 | `RATE_LIMIT_STORE` | `memory \| redis` | optional | `memory` | yes | Where rate-limit counters live. `memory` (default) is per-process; `redis` shares them across instances. See docs/RATE_LIMITING.md.
@@ -29,12 +105,14 @@ run with a missing or malformed value. See
 | `WEBHOOK_QUEUE_BACKOFF_MS` | integer | optional | `5000` \* | yes | Delay before the first webhook retry, doubling on each further retry. Default 5000.
 | `SCHEDULER_ENABLED` | `true \| false` | optional | `true` | yes | Set to 'false' to switch off every cron job registered through SchedulerModule. On unless 'false'. See docs/SCHEDULER.md.
 | `REDIS_URL` | string | conditional | — | yes (when required) | Redis connection URL (e.g. redis://localhost:6379). Required when RATE_LIMIT_STORE=redis, CACHE_DRIVER=redis or WEBHOOK_QUEUE_ENABLED=true.
-| `JWT_SECRET` | string (min 32 chars) | **required** | — | yes | Secret used to sign and verify JWT access tokens. Must be at least 32 characters. Rotating it invalidates every issued token. See docs/AUTHENTICATION.md.
+| `SECRETS_PROVIDER` | — | optional | `env` | yes | Where secrets such as JWT_SECRET are read from: `env` (default), `file` (`<KEY>_FILE` paths) or `custom` (a provider passed to `SecretsModule.forRoot`). See docs/CONFIGURATION.md.
+| `JWT_SECRET` | string | conditional | — | yes (when required) | Required when SECRETS_PROVIDER is `env` (the default).
+| `JWT_SECRET_FILE` | string | conditional | — | yes (when required) | Path of the file holding JWT_SECRET; required when SECRETS_PROVIDER=file.
 | `CORS_ORIGINS` | string | **required** | `http://localhost:3001` | yes | Comma-separated list of allowed CORS origins (e.g. "https://app.example.com,https://staging.example.com"). Wildcard (*) is NOT allowed in production. Used as the CORS allow-list and to build links in outbound email/webhooks.
 | `JSON_BODY_LIMIT` | string | optional | `100kb` | yes | Maximum accepted JSON request body, as an Express size string such as 100kb or 1mb. Larger payloads are rejected with 413. Default 100kb.
 | `CSP_DIRECTIVES` | string | optional | `{"defaultSrc":["'self'"],"scriptSrc":["'self'"]}` \* | yes | Helmet Content-Security-Policy directives as a JSON object string, e.g. {"defaultSrc":["'self'"]}. Leave unset to keep helmet's defaults.
 | `SOROBAN_RPC_URL` | string | **required** | — | yes | Soroban RPC endpoint the StellarService submits contract calls through.
-| `STELLAR_NETWORK` | `testnet \| futurenet \| mainnet` | **required** | `testnet` | yes | Which Stellar network every contract call targets. Must match the network the `ticketing` contract is deployed on and the one user wallets are set to, or every submit will fail.
+| `STELLAR_NETWORK` | — | **required** | `testnet` | yes | Which Stellar network every contract call targets. Must match the network the `ticketing` contract is deployed on and the one user wallets are set
 | `TICKETING_CONTRACT_ID` | string | **required** | — | yes | Deployed `ticketing` contract's C... address.
 | `PLATFORM_SIGNER_SECRET` | string | **required** | — | yes | Platform signer used for contract calls submitted on behalf of the backend itself (e.g. relaying an organizer's already-authorized op).
 | `OFFLINE_SIGNING_KEY_ID` | string | **required** | `2026-01` | yes | Key id of the Ed25519 key currently used to sign offline verification tokens. Must have a matching entry in OFFLINE_SIGNING_PUBLIC_KEYS.
