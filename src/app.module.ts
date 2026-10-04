@@ -5,6 +5,7 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { validate } from './config/env.validation';
 import { FeatureFlagsModule } from './config/feature-flags.module';
+import { SecretsModule } from './config/secrets/secrets.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/users.module';
@@ -34,6 +35,7 @@ import { RequestTimeoutInterceptor } from './common/interceptors/request-timeout
     CacheModule,
     WebhooksModule,
     FeatureFlagsModule,
+    SecretsModule.forRoot(),
     PrismaModule,
     StellarModule,
     AuthModule,

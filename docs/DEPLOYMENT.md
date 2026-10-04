@@ -33,7 +33,7 @@ Production configuration is driven by environment variables. **Never store produ
 | `PORT` | Yes | HTTP listening port | `3000` |
 | `APP_URL` | Yes | Allowed CORS origin URL | `https://app.example.com` |
 | `DATABASE_URL` | Yes | PostgreSQL connection string | `postgresql://user:pass@db-host:5432/stellartickets?sslmode=require` |
-| `JWT_SECRET` | Yes | Secret key for signing auth tokens | Minimum 32-character high-entropy secret |
+| `JWT_SECRET` | Yes | Secret key for signing auth tokens | Minimum 32-character high-entropy secret; can instead be loaded via `SECRETS_PROVIDER=file` or a custom provider (see "Secret providers" in `docs/CONFIGURATION.md`) |
 | `STELLAR_NETWORK` | Yes | Target Stellar network | `mainnet` (or `testnet` for staging) |
 | `SOROBAN_RPC_URL` | Yes | Production Soroban RPC node URL | `https://mainnet.soroban.rpc.endpoint` |
 | `TICKETING_CONTRACT_ID` | Yes | Deployed Stellar ticketing contract address | `C...` (Stellar C-address) |

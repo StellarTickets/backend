@@ -9,16 +9,13 @@ import {
   TransactionBuilder,
   rpc,
   BASE_FEE,
-  Networks,
   xdr,
 } from '@stellar/stellar-sdk';
 import { CircuitBreaker } from './circuit-breaker';
-
-const NETWORK_PASSPHRASES: Record<string, string> = {
-  testnet: Networks.TESTNET,
-  futurenet: Networks.FUTURENET,
-  mainnet: Networks.PUBLIC,
-};
+import {
+  NETWORK_PASSPHRASES,
+  StellarNetwork,
+} from '../config/stellar-networks';
 
 export interface OnChainTicket {
   eventId: bigint;
@@ -67,7 +64,7 @@ export class StellarService {
 
   constructor(private readonly config: ConfigService) {
     const rpcUrl = this.config.getOrThrow<string>('SOROBAN_RPC_URL');
-    const network = this.config.getOrThrow<string>('STELLAR_NETWORK');
+    const network = this.config.getOrThrow<StellarNetwork>('STELLAR_NETWORK');
     this.server = new rpc.Server(rpcUrl, {
       allowHttp: rpcUrl.startsWith('http://'),
     });

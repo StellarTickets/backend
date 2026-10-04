@@ -3,6 +3,7 @@ import type { ConfigService } from '@nestjs/config';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { json } from 'express';
 import helmet from 'helmet';
+import { applyApiPrefix } from './config/api-prefix';
 import { parseTrustProxy } from './config/trust-proxy';
 
 /**
@@ -19,6 +20,8 @@ export function configureApp(
   // Weak ETags on GET responses; Express answers a matching
   // If-None-Match with 304 Not Modified. See docs/API.md.
   app.set('etag', 'weak');
+
+  applyApiPrefix(app, config.get<string>('API_PREFIX'));
 
   const cspDirectives = config.get<string>('CSP_DIRECTIVES');
   const helmetOptions: Record<string, unknown> = {};
