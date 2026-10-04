@@ -40,6 +40,19 @@ describe('env.validate', () => {
     ).toThrow();
   });
 
+  it('accepts a valid TRUST_PROXY and treats it as optional', () => {
+    expect(() => validate(validConfig({ TRUST_PROXY: '1' }))).not.toThrow();
+    expect(() =>
+      validate(validConfig({ TRUST_PROXY: 'loopback,10.0.0.0/8' })),
+    ).not.toThrow();
+  });
+
+  it('rejects a malformed TRUST_PROXY at boot', () => {
+    expect(() => validate(validConfig({ TRUST_PROXY: 'on' }))).toThrow(
+      /Invalid environment configuration: Invalid TRUST_PROXY entry "on"/,
+    );
+  });
+
   it('defaults to the in-memory rate-limit store without a REDIS_URL', () => {
     expect(() =>
       validate(validConfig({ RATE_LIMIT_STORE: 'memory' })),

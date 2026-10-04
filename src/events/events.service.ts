@@ -11,7 +11,11 @@ import { PrismaService } from '../prisma/prisma.service';
 import { OrganizationsService } from '../organizations/organizations.service';
 import { StellarService } from '../stellar/stellar.service';
 import { AuditService } from '../audit/audit.service';
-import { DEFAULT_PAGE_LIMIT } from '../common/dto/pagination-query.dto';
+import {
+  DEFAULT_PAGE_LIMIT,
+  PaginationQueryDto,
+} from '../common/dto/pagination-query.dto';
+import { toSkipTake } from '../common/pagination/paginated';
 import { CreateEventDto } from './dto/create-event.dto';
 import { CreateTicketTypeDto } from './dto/create-ticket-type.dto';
 import { CACHE_STORE } from '../common/cache/cache-store';
@@ -180,20 +184,28 @@ export class EventsService {
     return event;
   }
 
-  findPublished() {
-    return this.prisma.event.findMany({
-      // #207 — exclude soft-deleted events and events of soft-deleted orgs.
-      where: {
-        status: EventStatus.PUBLISHED,
-        deletedAt: null,
-        organization: { deletedAt: null },
-      },
-      include: {
-        ticketTypes: { where: { isHidden: false } },
-        organization: { select: { name: true, slug: true } },
-      },
-      orderBy: { startsAt: 'asc' },
-    });
+  /** One page of published events plus the total count, for `GET /events`. */
+  findPublished(query: PaginationQueryDto) {
+    // #207 — exclude soft-deleted events and events of soft-deleted orgs.
+    const where = {
+      status: EventStatus.PUBLISHED,
+      deletedAt: null,
+      organization: { deletedAt: null },
+    };
+    return this.prisma.$transaction([
+      this.prisma.event.findMany({
+        where,
+        include: {
+          ticketTypes: { where: { isHidden: false } },
+          organization: { select: { name: true, slug: true } },
+        },
+        // `id` breaks ties between events starting at the same time so
+        // rows can't shift between pages.
+        orderBy: [{ startsAt: 'asc' }, { id: 'asc' }],
+        ...toSkipTake(query),
+      }),
+      this.prisma.event.count({ where }),
+    ]);
   }
 
   /** #207 — soft-delete: sets `deletedAt` instead of hard-deleting. */

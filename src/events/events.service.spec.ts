@@ -13,6 +13,7 @@ import { createEvent, createOrganization } from '../../test/factories';
 describe('EventsService', () => {
   let service: EventsService;
   let prisma: {
+    $transaction: jest.Mock;
     event: {
       create: jest.Mock;
       update: jest.Mock;
@@ -33,6 +34,9 @@ describe('EventsService', () => {
 
   beforeEach(() => {
     prisma = {
+      $transaction: jest.fn((operations: Promise<unknown>[]) =>
+        Promise.all(operations),
+      ),
       event: {
         create: jest.fn(),
         update: jest.fn(),
@@ -224,6 +228,47 @@ describe('EventsService', () => {
         data: { status: 'PUBLISHED', publishedTxHash: '0xabc' },
       });
       expect(event.status).toBe('PUBLISHED');
+    });
+  });
+
+  describe('findPublished', () => {
+    const publishedWhere = {
+      status: 'PUBLISHED',
+      deletedAt: null,
+      organization: { deletedAt: null },
+    };
+
+    it('returns one page of published events and the total count', async () => {
+      prisma.event.findMany.mockResolvedValue([{ id: 'event-21' }]);
+      prisma.event.count.mockResolvedValue(21);
+
+      const result = await service.findPublished({ page: 2, limit: 20 });
+
+      expect(result).toEqual([[{ id: 'event-21' }], 21]);
+      expect(prisma.event.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: publishedWhere,
+          orderBy: [{ startsAt: 'asc' }, { id: 'asc' }],
+          skip: 20,
+          take: 20,
+        }),
+      );
+      expect(prisma.event.count).toHaveBeenCalledWith({
+        where: publishedWhere,
+      });
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    });
+
+    it('still hides hidden ticket types', async () => {
+      prisma.event.findMany.mockResolvedValue([]);
+      prisma.event.count.mockResolvedValue(0);
+
+      await service.findPublished({ page: 1, limit: 20 });
+
+      const [args] = prisma.event.findMany.mock.calls[0] as [
+        { include: { ticketTypes: unknown } },
+      ];
+      expect(args.include.ticketTypes).toEqual({ where: { isHidden: false } });
     });
   });
 

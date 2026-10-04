@@ -17,6 +17,59 @@ API=http://localhost:3000
 TOKEN=<accessToken from /v1/auth/login>
 ```
 
+## Pagination
+
+Offset-paginated listings take `?page=&limit=` (`PaginationQueryDto`,
+`src/common/dto/pagination-query.dto.ts`):
+
+| Param | Default | Rules |
+|---|---|---|
+| `page` | `1` | integer ≥ 1 (1-based) |
+| `limit` | `20` | integer 1–100 |
+
+An out-of-range value is rejected with `400`. The response body is a
+`Paginated<T>` (`src/common/pagination/paginated.ts`). `page` is also capped at 100000:
+
+```json
+{ "items": [ ... ], "total": 57, "page": 2, "limit": 20 }
+```
+
+`total` counts matching rows across all pages. A page past the end
+returns `items: []` with the real `total`.
+
+Currently paginated: `GET /v1/events` (published events, ordered by
+`startsAt` then `id` so rows don't shift between pages).
+`GET /tickets/resale` uses cursor pagination instead
+(`?cursor=&limit=` → `{ items, nextCursor, limit }`).
+
+To paginate a new endpoint, accept `@Query() query: PaginationQueryDto`,
+have the service return `prisma.$transaction([findMany({ ...toSkipTake(query) }), count()])`,
+and add `PaginatedResponseInterceptor` to the handler's `@UseInterceptors(...)`. The
+interceptor turns the `[items, total]` result into a `Paginated<T>` body.
+Handlers can also build the body directly with `paginate(items, total, query)`.
+
+## Conditional GET (ETags)
+
+Every `GET` response carries a weak `ETag` (`W/"..."`), computed by
+Express from the response body (`app.set('etag', 'weak')` in
+`src/app.setup.ts`). A client that re-sends it as `If-None-Match` gets
+`304 Not Modified` with an empty body while the response is unchanged,
+so polling `GET /v1/events` does not re-download an identical list:
+
+```http
+GET /v1/events
+→ 200  ETag: W/"1a2-Lx0..."
+
+GET /v1/events
+If-None-Match: W/"1a2-Lx0..."
+→ 304  (no body)
+```
+
+The ETag is a hash of the serialized response, so it changes whenever
+any event on the page, or the page's `total`, changes. The server still
+runs the query to compute it: the saving is bandwidth and client-side
+parsing, not database work.
+
 ## Conventions
 
 **Versioning.** All routes live under `/v1` (URI versioning, default
@@ -378,17 +431,19 @@ A ticket type row:
 
 ### `GET /v1/events`
 
-Public marketplace listing: `PUBLISHED` events of live organizations,
+Public marketplace listing: one page (`?page=&limit=`, see
+[Pagination](#pagination)) of `PUBLISHED` events of live organizations,
 soonest first, each with its visible ticket types and the organizer's
 name and slug. Served with `Cache-Control: public, max-age=60, s-maxage=300`
 and an application cache (`CACHE_TTL_SECONDS`).
 
 ```bash
-curl -s "$API/v1/events"
+curl -s "$API/v1/events?page=1&limit=20"
 ```
 
 ```json
-[
+{
+  "items": [
   {
     "id": "7a1f3c5e-9b2d-4e6f-8a0c-1d2e3f4a5b6c",
     "name": "Launch Night",
@@ -398,7 +453,11 @@ curl -s "$API/v1/events"
     "ticketTypes": [{ "id": "4b8d2f6a-0c1e-4a3b-9d5f-6e7a8b9c0d1e", "name": "General Admission", "price": "2500000", "quantityTotal": 500, "quantityIssued": 12, "isHidden": false }],
     "organization": { "name": "Fillmore Live", "slug": "fillmore-live" }
   }
-]
+  ],
+  "total": 1,
+  "page": 1,
+  "limit": 20
+}
 ```
 
 (Other event columns omitted here for brevity; the response carries the

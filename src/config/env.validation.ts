@@ -13,6 +13,7 @@ import { API_PREFIX_PATTERN } from './api-prefix';
 import { getJwtSecretProblems, JWT_SECRET_MIN_LENGTH } from './jwt-secret';
 import { SECRET_PROVIDER_KINDS } from './secrets/secret-provider';
 import { getRpcNetworkProblems, STELLAR_NETWORKS } from './stellar-networks';
+import { parseTrustProxy } from './trust-proxy';
 
 class EnvironmentVariables {
   /// Which NestJS environment the app runs in. Drives logging verbosity and
@@ -151,6 +152,13 @@ class EnvironmentVariables {
   @IsOptional()
   CSP_DIRECTIVES?: string;
 
+  /// Express `trust proxy` setting: `true`, `false`, a hop count, or a
+  /// comma-separated list of proxy IPs / CIDR ranges. Unset means `false`.
+  /// See docs/DEPLOYMENT.md.
+  @IsString()
+  @IsOptional()
+  TRUST_PROXY?: string;
+
   /// Soroban RPC endpoint the StellarService submits contract calls through.
   @IsString()
   SOROBAN_RPC_URL!: string;
@@ -241,6 +249,14 @@ export function validate(config: Record<string, unknown>) {
   const corsOrigins = validated.CORS_ORIGINS.split(',').map((o) => o.trim());
   if (validated.NODE_ENV === 'production' && corsOrigins.includes('*')) {
     throw new Error('CORS_ORIGINS wildcard (*) is not allowed in production');
+  }
+
+  try {
+    parseTrustProxy(validated.TRUST_PROXY);
+  } catch (error) {
+    throw new Error(
+      `Invalid environment configuration: ${(error as Error).message}`,
+    );
   }
 
   return validated;

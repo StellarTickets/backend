@@ -59,9 +59,14 @@ describe('EventsController', () => {
 
   describe('public routes (no auth)', () => {
     it('GET /events lists published events', async () => {
-      service.findPublished.mockResolvedValue([{ id: 'e1' }]);
+      service.findPublished.mockResolvedValue([[{ id: 'e1' }], 1]);
       const res = await http().get('/events').expect(200);
-      expect(res.body).toEqual([{ id: 'e1' }]);
+      expect(res.body).toEqual({
+        items: [{ id: 'e1' }],
+        total: 1,
+        page: 1,
+        limit: 20,
+      });
       expect(res.headers['cache-control']).toBe(
         'public, max-age=60, s-maxage=300',
       );
