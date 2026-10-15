@@ -1,8 +1,6 @@
 import { Module } from '@nestjs/common';
 import { APP_INTERCEPTOR } from '@nestjs/core';
 import { ConfigModule } from '@nestjs/config';
-import { AppController } from './app.controller';
-import { AppService } from './app.service';
 import { validate } from './config/env.validation';
 import { FeatureFlagsModule } from './config/feature-flags.module';
 import { SecretsModule } from './config/secrets/secrets.module';
@@ -52,9 +50,7 @@ import { RequestLoggingInterceptor } from './common/interceptors/request-logging
     PendingTxModule,
     AuditModule,
   ],
-  controllers: [AppController],
   providers: [
-    AppService,
     TracingShutdownService,
     {
       provide: APP_INTERCEPTOR,

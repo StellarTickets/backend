@@ -107,19 +107,13 @@ export class TicketsService {
         }
         this.assertHasCapacity(row.quantityIssued, row.quantityTotal);
 
-        await tx.ticketType.update({
-          where: { id: ticketTypeId },
-          data: { quantityIssued: { increment: 1 } },
-        });
-        return tx.ticket.create({
-          data: {
-            eventId: event.id,
-            ticketTypeId,
-            ownerId: toUserId,
-            chainTicketId,
-            seat: seat ?? 'unassigned',
-            issuedTxHash: txHash,
-          },
+        return this.recordIssuedTicket(tx, {
+          eventId: event.id,
+          ticketTypeId,
+          ownerId: toUserId,
+          chainTicketId,
+          seat,
+          issuedTxHash: txHash,
         });
       });
     } catch (err) {
@@ -196,19 +190,13 @@ export class TicketsService {
         }
         this.assertHasCapacity(row.quantityIssued, row.quantityTotal);
 
-        await tx.ticketType.update({
-          where: { id: ticketTypeId },
-          data: { quantityIssued: { increment: 1 } },
-        });
-        return tx.ticket.create({
-          data: {
-            eventId: event.id,
-            ticketTypeId,
-            ownerId: buyerId,
-            chainTicketId,
-            seat: seat ?? 'unassigned',
-            issuedTxHash: txHash,
-          },
+        return this.recordIssuedTicket(tx, {
+          eventId: event.id,
+          ticketTypeId,
+          ownerId: buyerId,
+          chainTicketId,
+          seat,
+          issuedTxHash: txHash,
         });
       });
     } catch (err) {
@@ -273,18 +261,7 @@ export class TicketsService {
   // ---- Verification (read-only, organizer/gate staff) ----
 
   async verify(userId: string, qrSecret: string) {
-    const ticket = await this.prisma.ticket.findUnique({
-      where: { qrSecret },
-      include: {
-        event: { include: { organization: true } },
-        owner: true,
-        ticketType: true,
-      },
-    });
-    if (!ticket) {
-      throw new NotFoundException('Ticket not found');
-    }
-    await this.organizations.assertMember(ticket.event.organizationId, userId);
+    const ticket = await this.loadTicketForOrganizer(userId, { qrSecret });
 
     // #321 — Graceful degradation: if the Soroban RPC is unavailable, serve
     // the cached DB data with a `stale: true` marker rather than throwing.
@@ -344,8 +321,7 @@ export class TicketsService {
   // ---- Check-in ----
 
   async buildCheckInTx(userId: string, ticketId: string) {
-    const ticket = await this.getTicketWithOrg(ticketId);
-    await this.organizations.assertMember(ticket.event.organizationId, userId);
+    const ticket = await this.loadTicketForOrganizer(userId, { id: ticketId });
 
     const unsignedXdr = await this.stellar.buildCheckInTx({
       organizerPublicKey: ticket.event.organization.stellarAccount,
@@ -361,8 +337,7 @@ export class TicketsService {
     gateId?: string,
     reason?: string,
   ) {
-    const ticket = await this.getTicketWithOrg(ticketId);
-    await this.organizations.assertMember(ticket.event.organizationId, userId);
+    const ticket = await this.loadTicketForOrganizer(userId, { id: ticketId });
     if (gateId) {
       await this.gates!.assertBelongsToEvent(gateId, ticket.eventId);
     }
@@ -409,8 +384,7 @@ export class TicketsService {
   // ---- Revocation (fraud prevention) ----
 
   async buildRevokeTx(userId: string, ticketId: string) {
-    const ticket = await this.getTicketWithOrg(ticketId);
-    await this.organizations.assertMember(ticket.event.organizationId, userId);
+    const ticket = await this.loadTicketForOrganizer(userId, { id: ticketId });
 
     const unsignedXdr = await this.stellar.buildRevokeTicketTx({
       organizerPublicKey: ticket.event.organization.stellarAccount,
@@ -420,8 +394,7 @@ export class TicketsService {
   }
 
   async confirmRevoke(userId: string, ticketId: string, signedXdr: string) {
-    const ticket = await this.getTicketWithOrg(ticketId);
-    await this.organizations.assertMember(ticket.event.organizationId, userId);
+    const ticket = await this.loadTicketForOrganizer(userId, { id: ticketId });
     await this.stellar.submitSignedTransaction(signedXdr);
     const revoked = await this.prisma.ticket.update({
       where: { id: ticketId },
@@ -801,6 +774,37 @@ export class TicketsService {
     return ticket;
   }
 
+  /**
+   * Shared by `confirmIssue` and `confirmPurchase`: bumps the ticket type's
+   * issued count and creates the ticket row, inside the caller's transaction.
+   */
+  private async recordIssuedTicket(
+    tx: Prisma.TransactionClient,
+    params: {
+      eventId: string;
+      ticketTypeId: string;
+      ownerId: string;
+      chainTicketId: bigint;
+      seat?: string;
+      issuedTxHash: string;
+    },
+  ) {
+    await tx.ticketType.update({
+      where: { id: params.ticketTypeId },
+      data: { quantityIssued: { increment: 1 } },
+    });
+    return tx.ticket.create({
+      data: {
+        eventId: params.eventId,
+        ticketTypeId: params.ticketTypeId,
+        ownerId: params.ownerId,
+        chainTicketId: params.chainTicketId,
+        seat: params.seat ?? 'unassigned',
+        issuedTxHash: params.issuedTxHash,
+      },
+    });
+  }
+
   // ---- shared helpers ----
 
   private async getTicketTypeWithEvent(ticketTypeId: string) {
@@ -833,6 +837,30 @@ export class TicketsService {
     if (!ticket) {
       throw new NotFoundException('Ticket not found');
     }
+    return ticket;
+  }
+
+  /**
+   * Shared lookup for organizer-only ticket actions: loads the ticket with
+   * its event, organization, owner and ticket type, then asserts the caller
+   * is a member of the owning organization.
+   */
+  private async loadTicketForOrganizer(
+    userId: string,
+    where: Prisma.TicketWhereUniqueInput,
+  ) {
+    const ticket = await this.prisma.ticket.findUnique({
+      where,
+      include: {
+        event: { include: { organization: true } },
+        owner: true,
+        ticketType: true,
+      },
+    });
+    if (!ticket) {
+      throw new NotFoundException('Ticket not found');
+    }
+    await this.organizations.assertMember(ticket.event.organizationId, userId);
     return ticket;
   }
 

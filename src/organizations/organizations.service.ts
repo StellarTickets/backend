@@ -26,7 +26,18 @@ export class OrganizationsService {
     }
 
     const org = await this.prisma.$transaction(async (tx) => {
-      const created = await tx.organization.create({ data: dto });
+      const created = await tx.organization.create({
+        data: {
+          name: dto.name,
+          slug: dto.slug,
+          industry: dto.industry,
+          stellarAccount: dto.stellarAccount,
+          logoUrl: dto.logoUrl,
+          websiteUrl: dto.websiteUrl,
+          defaultMaxResaleMultiplierBps: dto.defaultMaxResaleMultiplierBps,
+          defaultRoyaltyBps: dto.defaultRoyaltyBps,
+        },
+      });
       await tx.organizationMember.create({
         data: { organizationId: created.id, userId, role: OrgMemberRole.OWNER },
       });
