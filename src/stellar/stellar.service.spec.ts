@@ -236,7 +236,7 @@ describe('StellarService (contract-mock harness)', () => {
       );
     });
 
-    it('gives the wallet a five-minute window to sign', async () => {
+    it('gives the wallet a five-minute window to sign by default', async () => {
       const { service } = createStellarHarness();
       const before = Math.floor(Date.now() / 1000);
 
@@ -252,6 +252,23 @@ describe('StellarService (contract-mock harness)', () => {
       expect(timeBounds.minTime).toBe(0);
       expect(timeBounds.maxTime).toBeGreaterThanOrEqual(before + 300);
       expect(timeBounds.maxTime).toBeLessThanOrEqual(before + 305);
+    });
+
+    it('honors TRANSACTION_BUILD_TIMEOUT_SECONDS instead of the fixed 300s default', async () => {
+      const { service } = createStellarHarness({ buildTimeoutSeconds: 60 });
+      const before = Math.floor(Date.now() / 1000);
+
+      const envelope = await service.buildCheckInTx({
+        organizerPublicKey: ORGANIZER,
+        chainTicketId: CHAIN_TICKET_ID,
+      });
+
+      const { timeBounds } = decodeInvokeHostFunction(
+        envelope,
+        Networks.TESTNET,
+      );
+      expect(timeBounds.maxTime).toBeGreaterThanOrEqual(before + 60);
+      expect(timeBounds.maxTime).toBeLessThanOrEqual(before + 65);
     });
 
     it('binds the envelope to the configured network so a wallet on another network cannot sign it', async () => {
@@ -411,6 +428,24 @@ describe('StellarService (contract-mock harness)', () => {
 
       await expectation;
       expect(server.getTransaction).toHaveBeenCalledTimes(15);
+    });
+
+    it('honors TRANSACTION_POLL_TIMEOUT_SECONDS instead of the fixed 15-poll window', async () => {
+      const { service, server } = createStellarHarness({
+        pollTimeoutSeconds: 5,
+      });
+      const signed = await signedIssueEnvelope(service);
+      jest.useFakeTimers();
+      server.sendTransaction.mockResolvedValue(sendPending());
+      server.getTransaction.mockResolvedValue(txNotFound());
+
+      const expectation = expect(
+        service.submitSignedTransaction(signed),
+      ).rejects.toThrow(`Timed out waiting for transaction ${TX_HASH}`);
+      await jest.advanceTimersByTimeAsync(6_000);
+
+      await expectation;
+      expect(server.getTransaction).toHaveBeenCalledTimes(5);
     });
 
     it('rejects an envelope built for another network before touching RPC', async () => {

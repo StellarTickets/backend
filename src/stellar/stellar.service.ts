@@ -56,6 +56,15 @@ export interface OnChainEvent {
 /** How long a cached platform-signer account is reused for simulation. */
 const PLATFORM_ACCOUNT_CACHE_TTL_MS = 30_000;
 
+/** Default Soroban transaction time-bound for `build*Tx`, in seconds. */
+const DEFAULT_BUILD_TX_TIMEOUT_SECONDS = 300;
+
+/** Default window `submitSignedTransaction` polls for a result, in seconds. */
+const DEFAULT_POLL_TIMEOUT_SECONDS = 15;
+
+/** Interval between `getTransaction` polls while awaiting a result. */
+const POLL_INTERVAL_MS = 1_000;
+
 @Injectable()
 export class StellarService {
   private readonly logger = new Logger(StellarService.name);
@@ -63,6 +72,8 @@ export class StellarService {
   private readonly contract: Contract;
   private readonly networkPassphrase: string;
   private readonly platformSigner: Keypair;
+  private readonly buildTxTimeoutSeconds: number;
+  private readonly pollTimeoutSeconds: number;
   private readonly rpcCircuitBreaker = new CircuitBreaker();
   private platformAccountCache: {
     account: Awaited<ReturnType<rpc.Server['getAccount']>>;
@@ -82,6 +93,12 @@ export class StellarService {
     this.platformSigner = Keypair.fromSecret(
       this.config.getOrThrow<string>('PLATFORM_SIGNER_SECRET'),
     );
+    this.buildTxTimeoutSeconds =
+      this.config.get<number>('TRANSACTION_BUILD_TIMEOUT_SECONDS') ??
+      DEFAULT_BUILD_TX_TIMEOUT_SECONDS;
+    this.pollTimeoutSeconds =
+      this.config.get<number>('TRANSACTION_POLL_TIMEOUT_SECONDS') ??
+      DEFAULT_POLL_TIMEOUT_SECONDS;
   }
 
   getCircuitBreakerMetrics() {
@@ -237,7 +254,10 @@ export class StellarService {
     }
 
     const txHash = sendResult.hash;
-    const returnValue = await this.pollTransaction(txHash);
+    const attempts = Math.ceil(
+      (this.pollTimeoutSeconds * 1000) / POLL_INTERVAL_MS,
+    );
+    const returnValue = await this.pollTransaction(txHash, attempts);
     return { result: scValToNative(returnValue), txHash };
   }
 
@@ -299,7 +319,7 @@ export class StellarService {
       networkPassphrase: this.networkPassphrase,
     })
       .addOperation(this.contract.call(fn, ...args))
-      .setTimeout(300)
+      .setTimeout(this.buildTxTimeoutSeconds)
       .build();
 
     const prepared = await this.rpcCall(() =>
@@ -310,7 +330,7 @@ export class StellarService {
 
   private async pollTransaction(
     hash: string,
-    attempts = 15,
+    attempts: number,
   ): Promise<xdr.ScVal> {
     for (let i = 0; i < attempts; i++) {
       const tx = await this.rpcCall(() => this.server.getTransaction(hash));
@@ -325,7 +345,7 @@ export class StellarService {
       if (tx.status === rpc.Api.GetTransactionStatus.FAILED) {
         throw new Error(`Transaction ${hash} failed on-chain`);
       }
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
     }
     throw new Error(`Timed out waiting for transaction ${hash} to land`);
   }

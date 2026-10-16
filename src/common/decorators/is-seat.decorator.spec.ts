@@ -64,6 +64,20 @@ describe('IsSeat decorator', () => {
     expect(errors).toHaveLength(1);
   });
 
+  it('rejects the reserved "unassigned" sentinel', async () => {
+    const dto = new TestDto();
+    dto.seat = 'unassigned';
+    const errors = await validate(dto);
+    expect(errors).toHaveLength(1);
+  });
+
+  it('rejects the reserved sentinel regardless of case', async () => {
+    const dto = new TestDto();
+    dto.seat = 'Unassigned';
+    const errors = await validate(dto);
+    expect(errors).toHaveLength(1);
+  });
+
   it('rejects non-string values', async () => {
     const dto = new TestDto();
     (dto.seat as unknown) = 123;

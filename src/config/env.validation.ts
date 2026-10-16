@@ -194,6 +194,18 @@ class EnvironmentVariables {
   @IsString()
   OFFLINE_SIGNING_PUBLIC_KEYS!: string;
 
+  /// Soroban transaction time-bound set on every `build*Tx` envelope, in
+  /// seconds. Default 300. See docs/NON_CUSTODIAL.md.
+  @IsInt()
+  @IsOptional()
+  TRANSACTION_BUILD_TIMEOUT_SECONDS?: number;
+
+  /// How long `submitSignedTransaction` polls `getTransaction` for a result
+  /// before giving up, in seconds. Default 15.
+  @IsInt()
+  @IsOptional()
+  TRANSACTION_POLL_TIMEOUT_SECONDS?: number;
+
   /// How long a PendingTx row (build-transaction intent) stays valid before
   /// it's considered expired and eligible for cleanup.
   @IsInt()

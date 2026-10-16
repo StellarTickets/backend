@@ -68,6 +68,11 @@ export function getRpcNetworkProblems(
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
     return [`SOROBAN_RPC_URL must use http or https, got "${url.protocol}"`];
   }
+  if (network === 'mainnet' && url.protocol !== 'https:') {
+    return [
+      `SOROBAN_RPC_URL must use https when STELLAR_NETWORK is "mainnet", got "${url.protocol}"`,
+    ];
+  }
   const inferred = inferNetworkFromRpcUrl(rpcUrl);
   if (inferred && inferred !== network) {
     return [

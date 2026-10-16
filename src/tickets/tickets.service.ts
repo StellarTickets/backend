@@ -10,6 +10,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { Prisma, ResaleListingStatus, TicketStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { UNASSIGNED_SEAT } from '../common/constants/seat.constant';
 import {
   ListingInactiveError,
   TicketTypeSoldOutError,
@@ -68,7 +69,7 @@ export class TicketsService {
       chainEventId: event.chainEventId,
       toPublicKey: toUser.stellarPublicKey!,
       tier: ticketType.name,
-      seat: seat ?? 'unassigned',
+      seat: seat ?? UNASSIGNED_SEAT,
       price: ticketType.price,
     });
     return { unsignedXdr };
@@ -154,7 +155,7 @@ export class TicketsService {
       buyerPublicKey: buyer.stellarPublicKey!,
       chainEventId: event.chainEventId,
       tier: ticketType.name,
-      seat: seat ?? 'unassigned',
+      seat: seat ?? UNASSIGNED_SEAT,
       price,
     });
     return { unsignedXdr };
@@ -214,7 +215,7 @@ export class TicketsService {
         eventName: event.name,
         ticketType: (await this.getTicketTypeWithEvent(ticketTypeId)).ticketType
           .name,
-        seat: seat ?? 'unassigned',
+        seat: seat ?? UNASSIGNED_SEAT,
       });
     }
     return ticket;
@@ -799,7 +800,7 @@ export class TicketsService {
         ticketTypeId: params.ticketTypeId,
         ownerId: params.ownerId,
         chainTicketId: params.chainTicketId,
-        seat: params.seat ?? 'unassigned',
+        seat: params.seat ?? UNASSIGNED_SEAT,
         issuedTxHash: params.issuedTxHash,
       },
     });
@@ -920,10 +921,14 @@ export class TicketsService {
    * `Ticket_eventId_seat_partial_key` (eventId, seat WHERE seat <> 'unassigned').
    * The DB remains the source of truth; this check only produces a nicer
    * 409 before the chain round-trip.
+   *
+   * #404 — `IsSeat` already rejects a real seat named "unassigned" (any
+   * case), so this sentinel can never collide with a genuine seat; the
+   * case-insensitive compare here just mirrors that at the service layer.
    */
   private async assertSeatAvailable(eventId: string, seat?: string) {
-    const normalized = seat?.trim() ?? 'unassigned';
-    if (!normalized || normalized === 'unassigned') return;
+    const normalized = seat?.trim() ?? UNASSIGNED_SEAT;
+    if (!normalized || normalized.toLowerCase() === UNASSIGNED_SEAT) return;
     const existing = await this.prisma.ticket.findFirst({
       where: { eventId, seat: normalized },
       select: { id: true },

@@ -1,4 +1,5 @@
 import type { ResaleListing, Ticket } from '@prisma/client';
+import { UNASSIGNED_SEAT } from '../../src/common/constants/seat.constant';
 
 let ticketCounter = 0;
 let listingCounter = 0;
@@ -12,7 +13,7 @@ export function createTicket(overrides: Partial<Ticket> = {}): Ticket {
     ticketTypeId: `tt-${n}`,
     ownerId: `user-${n}`,
     chainTicketId: BigInt(n),
-    seat: 'unassigned',
+    seat: UNASSIGNED_SEAT,
     status: 'VALID',
     qrSecret: `qr-secret-${n}`,
     issuedTxHash: null,

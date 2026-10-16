@@ -46,4 +46,25 @@ describe('getRpcNetworkProblems', () => {
     expect(problem).toContain('serves testnet');
     expect(problem).toContain('"mainnet"');
   });
+
+  it('rejects a plain-http RPC URL when the network is mainnet', () => {
+    const [problem] = getRpcNetworkProblems(
+      'http://localhost:8000/soroban/rpc',
+      'mainnet',
+    );
+    expect(problem).toContain('https');
+    expect(problem).toContain('"mainnet"');
+  });
+
+  it('allows a plain-http RPC URL for non-mainnet networks', () => {
+    expect(
+      getRpcNetworkProblems('http://localhost:8000/soroban/rpc', 'testnet'),
+    ).toEqual([]);
+  });
+
+  it('allows an https RPC URL for mainnet', () => {
+    expect(
+      getRpcNetworkProblems('https://mainnet.sorobanrpc.com', 'mainnet'),
+    ).toEqual([]);
+  });
 });

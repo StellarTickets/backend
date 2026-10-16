@@ -28,6 +28,8 @@ export interface StellarHarnessOptions {
   rpcUrl?: string;
   contractId?: string;
   server?: Partial<MockRpcServer>;
+  buildTimeoutSeconds?: number;
+  pollTimeoutSeconds?: number;
 }
 
 export interface StellarHarness {
@@ -56,9 +58,18 @@ export function createStellarHarness(
     STELLAR_NETWORK: network,
     TICKETING_CONTRACT_ID: options.contractId ?? TEST_CONTRACT_ID,
     PLATFORM_SIGNER_SECRET: platformSigner.secret(),
+    ...(options.buildTimeoutSeconds !== undefined
+      ? { TRANSACTION_BUILD_TIMEOUT_SECONDS: String(options.buildTimeoutSeconds) }
+      : {}),
+    ...(options.pollTimeoutSeconds !== undefined
+      ? { TRANSACTION_POLL_TIMEOUT_SECONDS: String(options.pollTimeoutSeconds) }
+      : {}),
   };
   const config = {
-    get: (key: string) => env[key],
+    get: (key: string) => {
+      const value = env[key];
+      return value === undefined ? undefined : Number.isNaN(Number(value)) ? value : Number(value);
+    },
     getOrThrow: (key: string) => {
       const value = env[key];
       if (value === undefined) {
