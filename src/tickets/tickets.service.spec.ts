@@ -1133,6 +1133,208 @@ describe('TicketsService', () => {
     });
   });
 
+  // ---- confirmCheckIn / confirmRevoke status updates (#413) ----
+
+  describe('confirmCheckIn — status update', () => {
+    const ticketRow = {
+      id: 'ticket-1',
+      eventId: 'event-1',
+      ownerId: 'owner-1',
+      event: { organizationId: 'org-1', organization: {} },
+    };
+
+    it('writes USED status and checkedInAt after a successful submission', async () => {
+      prisma.ticket.findUnique.mockResolvedValue(ticketRow);
+      prisma.ticket.update.mockImplementation(({ data }) =>
+        Promise.resolve({ id: 'ticket-1', ...data }),
+      );
+
+      const before = Date.now();
+      const result = await service.confirmCheckIn(
+        'user-1',
+        'ticket-1',
+        'signed-xdr',
+      );
+
+      expect(stellar.submitSignedTransaction).toHaveBeenCalledWith(
+        'signed-xdr',
+      );
+      expect(prisma.ticket.update).toHaveBeenCalledWith({
+        where: { id: 'ticket-1' },
+        data: expect.objectContaining({
+          status: 'USED',
+          checkedInAt: expect.any(Date),
+        }),
+      });
+      expect(result.status).toBe('USED');
+      expect((result.checkedInAt as Date).getTime()).toBeGreaterThanOrEqual(
+        before,
+      );
+    });
+
+    it('does not update the ticket when submission fails', async () => {
+      prisma.ticket.findUnique.mockResolvedValue(ticketRow);
+      stellar.submitSignedTransaction.mockRejectedValueOnce(
+        new Error('Soroban submission failed'),
+      );
+
+      await expect(
+        service.confirmCheckIn('user-1', 'ticket-1', 'bad-signed-xdr'),
+      ).rejects.toThrow('Soroban submission failed');
+      expect(prisma.ticket.update).not.toHaveBeenCalled();
+    });
+
+    it('requires the caller to be a member of the event organization', async () => {
+      prisma.ticket.findUnique.mockResolvedValue(ticketRow);
+      organizations.assertMember.mockRejectedValueOnce(
+        new ForbiddenException('Not a member'),
+      );
+
+      await expect(
+        service.confirmCheckIn('outsider-1', 'ticket-1', 'signed-xdr'),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+      expect(stellar.submitSignedTransaction).not.toHaveBeenCalled();
+      expect(prisma.ticket.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('confirmRevoke — status update', () => {
+    const ticketRow = {
+      id: 'ticket-1',
+      eventId: 'event-1',
+      ownerId: 'owner-1',
+      chainTicketId: 7n,
+      event: {
+        organizationId: 'org-1',
+        organization: { stellarAccount: 'GORG' },
+      },
+    };
+
+    it('writes REVOKED status after a successful submission', async () => {
+      prisma.ticket.findUnique.mockResolvedValue(ticketRow);
+      prisma.ticket.update.mockImplementation(({ data }) =>
+        Promise.resolve({ id: 'ticket-1', ...data }),
+      );
+
+      const result = await service.confirmRevoke(
+        'organizer-1',
+        'ticket-1',
+        'signed-xdr',
+      );
+
+      expect(stellar.submitSignedTransaction).toHaveBeenCalledWith(
+        'signed-xdr',
+      );
+      expect(prisma.ticket.update).toHaveBeenCalledWith({
+        where: { id: 'ticket-1' },
+        data: { status: 'REVOKED' },
+      });
+      expect(result.status).toBe('REVOKED');
+    });
+
+    it('does not update the ticket when submission fails', async () => {
+      prisma.ticket.findUnique.mockResolvedValue(ticketRow);
+      stellar.submitSignedTransaction.mockRejectedValueOnce(
+        new Error('Soroban submission failed'),
+      );
+
+      await expect(
+        service.confirmRevoke('organizer-1', 'ticket-1', 'bad-signed-xdr'),
+      ).rejects.toThrow('Soroban submission failed');
+      expect(prisma.ticket.update).not.toHaveBeenCalled();
+    });
+
+    it('requires the caller to be a member of the event organization', async () => {
+      prisma.ticket.findUnique.mockResolvedValue(ticketRow);
+      organizations.assertMember.mockRejectedValueOnce(
+        new ForbiddenException('Not a member'),
+      );
+
+      await expect(
+        service.confirmRevoke('outsider-1', 'ticket-1', 'signed-xdr'),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+      expect(stellar.submitSignedTransaction).not.toHaveBeenCalled();
+      expect(prisma.ticket.update).not.toHaveBeenCalled();
+    });
+  });
+
+  // ---- buildBuyResaleTx status guard and seller/buyer checks (#414) ----
+
+  describe('buildBuyResaleTx — status guard and buyer checks', () => {
+    const resaleTicketRow = {
+      id: 'ticket-1',
+      status: 'RESALE',
+      ownerId: 'seller-1',
+      chainTicketId: 7n,
+      event: {
+        organizationId: 'org-1',
+        organization: { stellarAccount: 'GORG' },
+      },
+    };
+
+    it('rejects a VALID ticket (not listed for resale)', async () => {
+      prisma.ticket.findUnique.mockResolvedValue({
+        ...resaleTicketRow,
+        status: 'VALID',
+      });
+
+      await expect(
+        service.buildBuyResaleTx('buyer-1', 'ticket-1'),
+      ).rejects.toBeInstanceOf(ListingInactiveError);
+      expect(stellar.buildBuyResaleTx).not.toHaveBeenCalled();
+    });
+
+    it('builds the transaction for a RESALE ticket using the buyer public key', async () => {
+      prisma.ticket.findUnique.mockResolvedValue(resaleTicketRow);
+      prisma.user.findUnique.mockResolvedValue({
+        id: 'buyer-1',
+        stellarPublicKey: 'GBUYER',
+      });
+
+      const { unsignedXdr } = await service.buildBuyResaleTx(
+        'buyer-1',
+        'ticket-1',
+      );
+
+      expect(unsignedXdr).toBe('unsigned-xdr');
+      expect(stellar.buildBuyResaleTx).toHaveBeenCalledWith({
+        buyerPublicKey: 'GBUYER',
+        chainTicketId: 7n,
+      });
+    });
+
+    it('requires the buyer to have a connected Stellar wallet', async () => {
+      prisma.ticket.findUnique.mockResolvedValue(resaleTicketRow);
+      prisma.user.findUnique.mockResolvedValue({
+        id: 'buyer-1',
+        stellarPublicKey: null,
+      });
+
+      await expect(
+        service.buildBuyResaleTx('buyer-1', 'ticket-1'),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(stellar.buildBuyResaleTx).not.toHaveBeenCalled();
+    });
+
+    it('requires the buyer to exist', async () => {
+      prisma.ticket.findUnique.mockResolvedValue(resaleTicketRow);
+      prisma.user.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.buildBuyResaleTx('missing-buyer', 'ticket-1'),
+      ).rejects.toBeInstanceOf(NotFoundException);
+      expect(stellar.buildBuyResaleTx).not.toHaveBeenCalled();
+    });
+
+    it('throws when the ticket itself does not exist', async () => {
+      prisma.ticket.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.buildBuyResaleTx('buyer-1', 'missing-ticket'),
+      ).rejects.toBeInstanceOf(NotFoundException);
+    });
+  });
+
   // ---- Check-in with reason (#266) ----
 
   describe('confirmCheckIn with reason', () => {
