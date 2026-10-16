@@ -79,6 +79,32 @@ describe('OrganizationsService', () => {
       });
       expect(org).toMatchObject({ id: 'org-1', slug: 'test-org' });
     });
+
+    it('rolls back when a write inside the transaction fails', async () => {
+      prisma.organization.findUnique.mockResolvedValue(null);
+      prisma.organization.create.mockResolvedValue(
+        createOrganization({ id: 'org-1', slug: 'test-org' }),
+      );
+      prisma.organizationMember.create.mockRejectedValue(
+        new Error('membership write failed'),
+      );
+
+      await expect(
+        service.create(
+          'user-1',
+          createOrganization({
+            name: 'Test Org',
+            slug: 'test-org',
+            industry: 'CONCERTS',
+          }) as never,
+        ),
+      ).rejects.toThrow('membership write failed');
+
+      // The role promotion must never run once an earlier write in the same
+      // transaction has failed, and the caller must never see the org that
+      // $transaction's rejection means was rolled back.
+      expect(prisma.user.updateMany).not.toHaveBeenCalled();
+    });
   });
 
   describe('findOne', () => {
