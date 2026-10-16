@@ -1,7 +1,7 @@
 /**
  * prisma/seed.ts — local development seed
  *
- * Creates a demo user, organiser, event and two ticket types so new
+ * Creates a demo user, organiser, published event and two ticket types so new
  * contributors have a populated DB immediately after running
  * `npx prisma migrate dev`.
  *
@@ -12,7 +12,13 @@
  * running the script more than once is safe.
  */
 
-import { PrismaClient, Industry, UserRole, OrgMemberRole } from '@prisma/client';
+import {
+  PrismaClient,
+  EventStatus,
+  Industry,
+  UserRole,
+  OrgMemberRole,
+} from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 
 const prisma = new PrismaClient();
@@ -87,10 +93,16 @@ async function main() {
         organizationId: org.id,
         name: 'StellarFest 2027',
         category: Industry.CONCERTS,
+        status: EventStatus.PUBLISHED,
         venue: 'The Stellar Arena, Cape Town',
         startsAt: new Date('2027-03-15T19:00:00Z'),
         endsAt: new Date('2027-03-15T23:00:00Z'),
       },
+    });
+  } else if (event.status !== EventStatus.PUBLISHED) {
+    event = await prisma.event.update({
+      where: { id: event.id },
+      data: { status: EventStatus.PUBLISHED },
     });
   }
 

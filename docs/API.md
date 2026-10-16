@@ -1,5 +1,12 @@
 # API reference
 
+## Interactive OpenAPI documentation
+
+When `NODE_ENV` is not `production`, Swagger UI is available at `/docs` and
+the generated OpenAPI document at `/docs-json`. The schema is generated from
+controllers and DTOs at startup. Swagger is disabled in production so the
+interactive schema is not exposed publicly.
+
 Every route below is real: paths come from the controllers, request
 bodies from the `class-validator` DTOs, and response bodies from what the
 services return. When they drift, the generated Bruno collection under

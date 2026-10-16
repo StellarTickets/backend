@@ -23,6 +23,7 @@ describe('GlobalExceptionFilter', () => {
     const request = {
       method: 'GET',
       url: '/test',
+      headers: { 'x-request-id': 'req-test-1' },
     };
     const argumentsHost = {
       switchToHttp: () => ({
@@ -216,6 +217,8 @@ describe('GlobalExceptionFilter', () => {
         statusCode: HttpStatus.INTERNAL_SERVER_ERROR,
         code: 'INTERNAL_ERROR',
         message: 'Internal server error',
+        error: 'Internal Server Error',
+        requestId: 'req-test-1',
       });
     });
   });
@@ -233,6 +236,8 @@ describe('GlobalExceptionFilter', () => {
         statusCode: HttpStatus.INTERNAL_SERVER_ERROR,
         code: 'INTERNAL_ERROR',
         message: 'Internal server error',
+        error: 'Internal Server Error',
+        requestId: 'req-test-1',
       });
     });
 
@@ -248,6 +253,8 @@ describe('GlobalExceptionFilter', () => {
         statusCode: HttpStatus.INTERNAL_SERVER_ERROR,
         code: 'INTERNAL_ERROR',
         message: 'Internal server error',
+        error: 'Internal Server Error',
+        requestId: 'req-test-1',
       });
     });
   });

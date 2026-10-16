@@ -7,6 +7,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import type { Request, Response } from 'express';
+import { randomUUID } from 'node:crypto';
 import { Prisma } from '@prisma/client';
 import { DomainError } from '../errors/domain.error';
 
@@ -73,11 +74,21 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       );
     }
 
-    response.status(statusCode).json({
+    const responseBody = {
       statusCode,
       code,
       message,
-    });
+      ...(code === 'INTERNAL_ERROR' && {
+        error: 'Internal Server Error',
+        requestId: this.getRequestId(request),
+      }),
+    };
+    response.status(statusCode).json(responseBody);
+  }
+
+  private getRequestId(request: Request): string {
+    const header = request.headers['x-request-id'];
+    return (Array.isArray(header) ? header[0] : header) ?? randomUUID();
   }
 
   private getPrismaErrorMessage(
