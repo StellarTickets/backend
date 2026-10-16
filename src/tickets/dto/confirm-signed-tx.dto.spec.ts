@@ -26,6 +26,14 @@ describe('ConfirmSignedTxDto', () => {
     expect(errors.some((e) => e.property === 'signedXdr')).toBe(true);
   });
 
+  it('rejects a signedXdr that is not base64 (#401)', async () => {
+    const dto = plainToInstance(ConfirmSignedTxDto, {
+      signedXdr: 'not valid base64!!! {}',
+    });
+    const errors = await validate(dto);
+    expect(errors.some((e) => e.property === 'signedXdr')).toBe(true);
+  });
+
   it('rejects a malformed txHash', async () => {
     const dto = plainToInstance(ConfirmSignedTxDto, {
       signedXdr: 'AAAAAgAAAAA=',

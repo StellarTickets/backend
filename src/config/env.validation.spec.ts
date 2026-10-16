@@ -10,8 +10,10 @@ function validConfig(overrides: Record<string, unknown> = {}) {
     CORS_ORIGINS: 'http://localhost:3001,https://staging.example.com',
     SOROBAN_RPC_URL: 'https://soroban-testnet.stellar.org',
     STELLAR_NETWORK: 'testnet',
-    TICKETING_CONTRACT_ID: 'C'.repeat(56),
-    PLATFORM_SIGNER_SECRET: 'S'.repeat(56),
+    TICKETING_CONTRACT_ID:
+      'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC',
+    PLATFORM_SIGNER_SECRET:
+      'SA4IGCSRIDQ3L4274BRKUGPMVCDB4A6IHFKRGMHLLZ7TPOIC4TEEI6QX',
     OFFLINE_SIGNING_KEY_ID: '2026-01',
     OFFLINE_SIGNING_PRIVATE_KEY:
       '-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----\n',
@@ -320,6 +322,46 @@ describe('env.validate', () => {
       expect(() =>
         validate(validConfig({ SECRETS_PROVIDER: 'vault' })),
       ).toThrow();
+    });
+  });
+
+  describe('PLATFORM_SIGNER_SECRET / TICKETING_CONTRACT_ID format (#402)', () => {
+    it('rejects a malformed PLATFORM_SIGNER_SECRET at boot', () => {
+      expect(() =>
+        validate(validConfig({ PLATFORM_SIGNER_SECRET: 'S'.repeat(56) })),
+      ).toThrow(/PLATFORM_SIGNER_SECRET/);
+    });
+
+    it('rejects a public key passed as PLATFORM_SIGNER_SECRET', () => {
+      expect(() =>
+        validate(
+          validConfig({
+            PLATFORM_SIGNER_SECRET:
+              'GBAHZWO3UI3GAHPQCPSW6IR5N7HJ4UBRZNAFMSYB6DAKVNHQDOZIV2YJ',
+          }),
+        ),
+      ).toThrow(/PLATFORM_SIGNER_SECRET/);
+    });
+
+    it('rejects a malformed TICKETING_CONTRACT_ID at boot', () => {
+      expect(() =>
+        validate(validConfig({ TICKETING_CONTRACT_ID: 'C'.repeat(56) })),
+      ).toThrow(/TICKETING_CONTRACT_ID/);
+    });
+
+    it('rejects an account address passed as TICKETING_CONTRACT_ID', () => {
+      expect(() =>
+        validate(
+          validConfig({
+            TICKETING_CONTRACT_ID:
+              'GBAHZWO3UI3GAHPQCPSW6IR5N7HJ4UBRZNAFMSYB6DAKVNHQDOZIV2YJ',
+          }),
+        ),
+      ).toThrow(/TICKETING_CONTRACT_ID/);
+    });
+
+    it('accepts well-formed values for both', () => {
+      expect(() => validate(validConfig())).not.toThrow();
     });
   });
 

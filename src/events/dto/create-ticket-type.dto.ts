@@ -1,4 +1,4 @@
-import { Transform, Type } from 'class-transformer';
+import { Type } from 'class-transformer';
 import {
   IsDate,
   IsInt,
@@ -9,11 +9,10 @@ import {
   MinLength,
 } from 'class-validator';
 import { IsBigIntString } from '../../common/decorators/is-bigint-string.decorator';
+import { Trim } from '../../common/decorators/trim.decorator';
 
 export class CreateTicketTypeDto {
-  @Transform(({ value }: { value: unknown }) =>
-    typeof value === 'string' ? value.trim() : value,
-  )
+  @Trim()
   @IsString()
   @MinLength(1)
   @MaxLength(256)

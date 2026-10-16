@@ -1,4 +1,4 @@
-import { Transform, Type } from 'class-transformer';
+import { Type } from 'class-transformer';
 import {
   IsArray,
   IsDate,
@@ -14,6 +14,7 @@ import {
   ValidateNested,
 } from 'class-validator';
 import { Industry } from '@prisma/client';
+import { Trim } from '../../common/decorators/trim.decorator';
 import { CreateEventTicketTypeDto } from './create-ticket-type.dto';
 
 /**
@@ -24,9 +25,7 @@ import { CreateEventTicketTypeDto } from './create-ticket-type.dto';
 export const STARTS_AT_PAST_TOLERANCE_MS = 60_000;
 
 export class CreateEventDto {
-  @Transform(({ value }: { value: unknown }) =>
-    typeof value === 'string' ? value.trim() : value,
-  )
+  @Trim()
   @IsString()
   @MinLength(2)
   @MaxLength(256)
@@ -37,9 +36,7 @@ export class CreateEventDto {
   })
   category!: Industry;
 
-  @Transform(({ value }: { value: unknown }) =>
-    typeof value === 'string' ? value.trim() : value,
-  )
+  @Trim()
   @IsString()
   @MinLength(1)
   @MaxLength(256)

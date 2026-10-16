@@ -1,4 +1,3 @@
-import { Transform } from 'class-transformer';
 import {
   IsEnum,
   IsInt,
@@ -13,11 +12,10 @@ import {
 } from 'class-validator';
 import { Industry } from '@prisma/client';
 import { IsStellarPublicKey } from '../../common/decorators/is-stellar-public-key.decorator';
+import { Trim } from '../../common/decorators/trim.decorator';
 
 export class CreateOrganizationDto {
-  @Transform(({ value }: { value: unknown }) =>
-    typeof value === 'string' ? value.trim() : value,
-  )
+  @Trim()
   @IsString()
   @MinLength(2)
   @MaxLength(256)

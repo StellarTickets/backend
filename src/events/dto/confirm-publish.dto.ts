@@ -1,8 +1,9 @@
-import { IsOptional, IsString, Matches } from 'class-validator';
+import { IsOptional, Matches } from 'class-validator';
+import { IsSignedXdr } from '../../common/decorators/is-signed-xdr.decorator';
 
 export class ConfirmPublishDto {
   /** Wallet-signed XDR envelope returned from POST /events/:id/publish, unmodified. */
-  @IsString()
+  @IsSignedXdr()
   signedXdr!: string;
 
   /** Optional 64-char hex transaction hash when the client already knows it. */

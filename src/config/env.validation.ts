@@ -9,6 +9,8 @@ import {
   ValidateIf,
   validateSync,
 } from 'class-validator';
+import { IsStellarContractId } from '../common/decorators/is-stellar-contract-id.decorator';
+import { IsStellarSecretSeed } from '../common/decorators/is-stellar-secret-seed.decorator';
 import { API_PREFIX_PATTERN } from './api-prefix';
 import { getJwtSecretProblems, JWT_SECRET_MIN_LENGTH } from './jwt-secret';
 import { SECRET_PROVIDER_KINDS } from './secrets/secret-provider';
@@ -169,13 +171,13 @@ class EnvironmentVariables {
   STELLAR_NETWORK!: string;
 
   /// Deployed `ticketing` contract's C... address.
-  @IsString()
+  @IsStellarContractId()
   TICKETING_CONTRACT_ID!: string;
 
   /// Platform hot wallet used only as a disposable source account for
   /// read-only contract simulations (verify_ticket, get_event). It signs
   /// nothing and is never used for a write. See docs/NON_CUSTODIAL.md.
-  @IsString()
+  @IsStellarSecretSeed()
   PLATFORM_SIGNER_SECRET!: string;
 
   /// Key id of the Ed25519 key currently used to sign offline verification
