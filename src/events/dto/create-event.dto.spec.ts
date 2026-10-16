@@ -102,4 +102,26 @@ describe('CreateEventDto', () => {
     );
     expect(errors.some((e) => e.property === 'ticketTypes')).toBe(true);
   });
+
+  describe('max length (#400)', () => {
+    it('rejects a name over 256 characters', async () => {
+      const errors = await validate(build({ name: 'a'.repeat(257) }));
+      expect(errors.some((e) => e.property === 'name')).toBe(true);
+    });
+
+    it('accepts a name at exactly 256 characters', async () => {
+      const errors = await validate(build({ name: 'a'.repeat(256) }));
+      expect(errors).toHaveLength(0);
+    });
+
+    it('rejects a venue over 256 characters', async () => {
+      const errors = await validate(build({ venue: 'a'.repeat(257) }));
+      expect(errors.some((e) => e.property === 'venue')).toBe(true);
+    });
+
+    it('accepts a venue at exactly 256 characters', async () => {
+      const errors = await validate(build({ venue: 'a'.repeat(256) }));
+      expect(errors).toHaveLength(0);
+    });
+  });
 });

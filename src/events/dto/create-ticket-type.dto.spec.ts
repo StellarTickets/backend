@@ -41,4 +41,16 @@ describe('CreateTicketTypeDto', () => {
     const errors = await validate(build({ price: 'abc' }));
     expect(errors.some((e) => e.property === 'price')).toBe(true);
   });
+
+  describe('max length (#400)', () => {
+    it('rejects a name over 256 characters', async () => {
+      const errors = await validate(build({ name: 'a'.repeat(257) }));
+      expect(errors.some((e) => e.property === 'name')).toBe(true);
+    });
+
+    it('accepts a name at exactly 256 characters', async () => {
+      const errors = await validate(build({ name: 'a'.repeat(256) }));
+      expect(errors).toHaveLength(0);
+    });
+  });
 });
