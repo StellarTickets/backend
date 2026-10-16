@@ -53,6 +53,9 @@ export interface OnChainEvent {
  * functions never call `require_auth`, so no signature from it is ever
  * required or requested.
  */
+/** How long a cached platform-signer account is reused for simulation. */
+const PLATFORM_ACCOUNT_CACHE_TTL_MS = 30_000;
+
 @Injectable()
 export class StellarService {
   private readonly logger = new Logger(StellarService.name);
@@ -61,6 +64,10 @@ export class StellarService {
   private readonly networkPassphrase: string;
   private readonly platformSigner: Keypair;
   private readonly rpcCircuitBreaker = new CircuitBreaker();
+  private platformAccountCache: {
+    account: Awaited<ReturnType<rpc.Server['getAccount']>>;
+    expiresAt: number;
+  } | null = null;
 
   constructor(private readonly config: ConfigService) {
     const rpcUrl = this.config.getOrThrow<string>('SOROBAN_RPC_URL');
@@ -234,10 +241,32 @@ export class StellarService {
     return { result: scValToNative(returnValue), txHash };
   }
 
-  private async simulateRead(fn: string, args: xdr.ScVal[]) {
+  /**
+   * Returns a cached `Account` for the platform signer, refetching only
+   * after the TTL expires. Simulation never submits a transaction, so the
+   * sequence number does not need to be live -- there is no benefit to a
+   * round trip to `getAccount` on every `verifyTicket`/`getEvent` call.
+   */
+  private async getPlatformAccount() {
+    const now = Date.now();
+    if (
+      this.platformAccountCache &&
+      this.platformAccountCache.expiresAt > now
+    ) {
+      return this.platformAccountCache.account;
+    }
     const account = await this.rpcCall(() =>
       this.server.getAccount(this.platformSigner.publicKey()),
     );
+    this.platformAccountCache = {
+      account,
+      expiresAt: now + PLATFORM_ACCOUNT_CACHE_TTL_MS,
+    };
+    return account;
+  }
+
+  private async simulateRead(fn: string, args: xdr.ScVal[]) {
+    const account = await this.getPlatformAccount();
     const tx = new TransactionBuilder(account, {
       fee: BASE_FEE,
       networkPassphrase: this.networkPassphrase,

@@ -90,7 +90,7 @@ describe('AuthService', () => {
           email: 'attendee@example.com',
           password: 'wrong-password',
         }),
-      ).rejects.toBeInstanceOf(UnauthorizedException);
+      ).rejects.toThrow(new UnauthorizedException('Invalid email or password'));
     });
 
     it('rejects an unknown email', async () => {
@@ -98,7 +98,27 @@ describe('AuthService', () => {
 
       await expect(
         service.login({ email: 'nobody@example.com', password: 'whatever12' }),
-      ).rejects.toBeInstanceOf(UnauthorizedException);
+      ).rejects.toThrow(new UnauthorizedException('Invalid email or password'));
+    });
+
+    it('gives an unknown email and a wrong password the exact same message', async () => {
+      const passwordHash = await bcrypt.hash('correct-horse-battery', 4);
+
+      prisma.user.findUnique.mockResolvedValueOnce(null);
+      const unknownEmail = await service
+        .login({ email: 'nobody@example.com', password: 'whatever12' })
+        .catch((e: UnauthorizedException) => e.message);
+
+      prisma.user.findUnique.mockResolvedValueOnce({
+        id: 'user-1',
+        email: 'attendee@example.com',
+        passwordHash,
+      });
+      const wrongPassword = await service
+        .login({ email: 'attendee@example.com', password: 'wrong-password' })
+        .catch((e: UnauthorizedException) => e.message);
+
+      expect(unknownEmail).toBe(wrongPassword);
     });
   });
 });

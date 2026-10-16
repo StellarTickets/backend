@@ -527,6 +527,53 @@ describe('StellarService (contract-mock harness)', () => {
       expect(ticket.status).toBe('Valid');
     });
 
+    it('reuses the cached platform account across several verifies instead of refetching it', async () => {
+      const { service, server } = createStellarHarness();
+      server.simulateTransaction.mockResolvedValue(
+        simulationSuccess(
+          ticketScVal({
+            eventId: CHAIN_EVENT_ID,
+            owner: ATTENDEE,
+            tier: 'GA',
+            seat: 'A-12',
+            status: 'Valid',
+            originalPrice: 1_000_000n,
+            resalePrice: 0n,
+          }),
+        ),
+      );
+
+      await service.verifyTicket(CHAIN_TICKET_ID);
+      await service.verifyTicket(CHAIN_TICKET_ID);
+      await service.verifyTicket(CHAIN_TICKET_ID);
+
+      expect(server.getAccount).toHaveBeenCalledTimes(1);
+    });
+
+    it('refetches the platform account once the cache TTL elapses', async () => {
+      const { service, server } = createStellarHarness();
+      server.simulateTransaction.mockResolvedValue(
+        simulationSuccess(
+          ticketScVal({
+            eventId: CHAIN_EVENT_ID,
+            owner: ATTENDEE,
+            tier: 'GA',
+            seat: 'A-12',
+            status: 'Valid',
+            originalPrice: 1_000_000n,
+            resalePrice: 0n,
+          }),
+        ),
+      );
+      jest.useFakeTimers();
+
+      await service.verifyTicket(CHAIN_TICKET_ID);
+      jest.advanceTimersByTime(30_001);
+      await service.verifyTicket(CHAIN_TICKET_ID);
+
+      expect(server.getAccount).toHaveBeenCalledTimes(2);
+    });
+
     it('getEvent decodes the Event struct and keeps the requested id', async () => {
       const { service, server } = createStellarHarness();
       server.simulateTransaction.mockResolvedValue(
