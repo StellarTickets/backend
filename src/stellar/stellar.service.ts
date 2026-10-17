@@ -343,6 +343,16 @@ export class StellarService {
    * a single `invokeHostFunction` call on the configured contract — the only
    * shape `build*Tx` ever produces.
    */
+  /**
+   * Hex hash of the wallet-signed envelope. Stable for a given envelope, so
+   * it identifies a confirm request across replays (#159).
+   */
+  txHashOf(signedXdr: string): string {
+    return TransactionBuilder.fromXDR(signedXdr, this.networkPassphrase)
+      .hash()
+      .toString('hex');
+  }
+
   decodeSignedInvocation(signedXdr: string): SignedInvocation {
     const tx = TransactionBuilder.fromXDR(signedXdr, this.networkPassphrase);
     const inner = tx instanceof Transaction ? tx : tx.innerTransaction;

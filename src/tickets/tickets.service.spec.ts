@@ -80,6 +80,7 @@ describe('TicketsService', () => {
       create: jest.Mock;
       findMany: jest.Mock;
     };
+    processedTx: { findUnique: jest.Mock; create: jest.Mock };
     user: { findUnique: jest.Mock };
     $transaction: jest.Mock;
   };
@@ -116,6 +117,10 @@ describe('TicketsService', () => {
         create: jest.fn(),
         findMany: jest.fn(),
       },
+      processedTx: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({}),
+      },
       user: { findUnique: jest.fn() },
       $transaction: jest.fn((cb: (tx: unknown) => unknown) =>
         Array.isArray(cb) ? Promise.all(cb) : cb(prisma),
@@ -136,6 +141,7 @@ describe('TicketsService', () => {
         .mockResolvedValue({ result: 7n, txHash: '0xabc' }),
       verifyTicket: jest.fn(),
       decodeSignedInvocation: jest.fn(),
+      txHashOf: jest.fn().mockReturnValue('hash-1'),
     };
     offlineTokens = {
       sign: jest.fn().mockReturnValue({
@@ -1838,6 +1844,53 @@ describe('TicketsService', () => {
         service.confirmBuyResale('buyer-1', 'ticket-1', 'signed-xdr'),
       ).rejects.toBeInstanceOf(BadRequestException);
       expect(stellar.submitSignedTransaction).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('replayed confirm requests (#159)', () => {
+    const ticketRow = {
+      id: 'ticket-1',
+      eventId: 'event-1',
+      ownerId: 'owner-1',
+      chainTicketId: 7n,
+      event: { organizationId: 'org-1', organization: { stellarAccount: 'GORG' } },
+    };
+
+    it('returns the stored response without re-submitting or re-writing', async () => {
+      const stored = { id: 'ticket-1', status: 'USED' };
+      prisma.processedTx.findUnique.mockResolvedValue({
+        txHash: 'hash-1',
+        operation: 'check-in',
+        response: stored,
+      });
+      prisma.ticket.findUnique.mockResolvedValue(ticketRow);
+
+      const result = await service.confirmCheckIn('user-1', 'ticket-1', 'signed-xdr');
+
+      expect(result).toEqual(stored);
+      expect(prisma.processedTx.findUnique).toHaveBeenCalledWith({
+        where: { txHash: 'hash-1' },
+      });
+      expect(stellar.submitSignedTransaction).not.toHaveBeenCalled();
+      expect(prisma.ticket.update).not.toHaveBeenCalled();
+      expect(prisma.processedTx.create).not.toHaveBeenCalled();
+    });
+
+    it('records the processed marker in the same transaction as the update', async () => {
+      mockSignedCall('revoke_ticket', ['GORG', 7n]);
+      prisma.ticket.findUnique.mockResolvedValue(ticketRow);
+      prisma.ticket.update.mockImplementation(({ data }) =>
+        Promise.resolve({ id: 'ticket-1', ...data }),
+      );
+
+      await service.confirmRevoke('organizer-1', 'ticket-1', 'signed-xdr');
+
+      expect(prisma.processedTx.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          txHash: 'hash-1',
+          operation: 'revoke',
+        }) as object,
+      });
     });
   });
 

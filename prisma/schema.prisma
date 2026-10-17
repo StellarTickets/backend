@@ -413,3 +413,13 @@ model PendingTx {
   @@index([expiresAt])
   @@index([userId])
 }
+
+/// Signed transactions already relayed and recorded by a confirm-* endpoint,
+/// keyed by the envelope hash (#159). A replayed confirm returns `response`
+/// instead of re-applying the DB changes.
+model ProcessedTx {
+  txHash    String   @id
+  operation String
+  response  Json
+  createdAt DateTime @default(now())
+}
