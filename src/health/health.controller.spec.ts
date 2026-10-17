@@ -5,15 +5,20 @@ import request from 'supertest';
 import { HealthController } from './health.controller';
 import { HealthService } from './health.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { StellarService } from '../stellar/stellar.service';
 
 describe('HealthController', () => {
   let app: INestApplication;
   let server: Server;
   let prismaService: { $queryRaw: jest.Mock };
+  let stellarService: { pingRpc: jest.Mock };
 
   beforeEach(async () => {
     prismaService = {
       $queryRaw: jest.fn(),
+    };
+    stellarService = {
+      pingRpc: jest.fn(),
     };
 
     const moduleRef: TestingModule = await Test.createTestingModule({
@@ -23,6 +28,10 @@ describe('HealthController', () => {
         {
           provide: PrismaService,
           useValue: prismaService,
+        },
+        {
+          provide: StellarService,
+          useValue: stellarService,
         },
       ],
     }).compile();
@@ -81,6 +90,26 @@ describe('HealthController', () => {
           status: 'error',
           database: 'disconnected',
         }),
+      );
+    });
+  });
+
+  describe('GET /health/rpc (#147)', () => {
+    it('returns 200 with latency when the RPC is reachable', async () => {
+      stellarService.pingRpc.mockResolvedValueOnce({ up: true, latencyMs: 42 });
+
+      const res = await request(server).get('/health/rpc').expect(200);
+
+      expect(res.body).toEqual({ status: 'up', latencyMs: 42 });
+    });
+
+    it('returns 503 when the RPC is unreachable', async () => {
+      stellarService.pingRpc.mockResolvedValueOnce({ up: false, latencyMs: 5000 });
+
+      const res = await request(server).get('/health/rpc').expect(503);
+
+      expect(res.body).toEqual(
+        expect.objectContaining({ statusCode: 503, status: 'down' }),
       );
     });
   });

@@ -831,6 +831,39 @@ describe('StellarService (contract-mock harness)', () => {
         'Soroban simulation for get_event returned no result',
       );
     });
+
+    it('retries a 5xx/network RPC failure with backoff, then succeeds (#143)', async () => {
+      const { service, server } = createStellarHarness();
+      jest.useFakeTimers();
+      const event = eventScVal({
+        organizer: ORGANIZER,
+        name: 'Retry Night',
+        category: 'CONCERTS',
+        maxResaleMultiplierBps: 11_000,
+        royaltyBps: 500,
+        ticketsIssued: 1n,
+      });
+      server.simulateTransaction
+        .mockRejectedValueOnce(Object.assign(new Error('ECONNRESET')))
+        .mockRejectedValueOnce(Object.assign(new Error('5xx'), { response: { status: 503 } }))
+        .mockResolvedValueOnce(simulationSuccess(event));
+
+      const pending = service.getEvent(CHAIN_EVENT_ID);
+      await jest.advanceTimersByTimeAsync(5_000);
+
+      await expect(pending).resolves.toMatchObject({ name: 'Retry Night' });
+      expect(server.simulateTransaction).toHaveBeenCalledTimes(3);
+    });
+
+    it('does not retry a non-retryable (4xx-shaped) RPC failure (#143)', async () => {
+      const { service, server } = createStellarHarness();
+      server.simulateTransaction.mockRejectedValue(
+        Object.assign(new Error('bad request'), { response: { status: 400 } }),
+      );
+
+      await expect(service.getEvent(CHAIN_EVENT_ID)).rejects.toThrow('bad request');
+      expect(server.simulateTransaction).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe('circuit breaker', () => {

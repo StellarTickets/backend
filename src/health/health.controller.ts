@@ -19,4 +19,9 @@ export class HealthController {
   getReady() {
     return this.healthService.getReady();
   }
+
+  @Get('rpc')
+  getRpc() {
+    return this.healthService.getRpc();
+  }
 }

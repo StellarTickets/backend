@@ -93,6 +93,9 @@ const MAX_SUBMIT_RETRIES = 3;
 /** #384 — Initial backoff delay in ms when retrying TRY_AGAIN_LATER. */
 const INITIAL_SUBMIT_BACKOFF_MS = 1_000;
 
+/** #145 — Default per-call Soroban RPC timeout. Override with SOROBAN_RPC_TIMEOUT_MS. */
+const DEFAULT_RPC_TIMEOUT_MS = 10_000;
+
 /**
  * Default ceiling on the platform-paid fee for one sponsored attendee
  * transaction, in stroops (100_000 = 0.01 XLM). Override with
@@ -104,6 +107,38 @@ const DEFAULT_FEE_BUMP_MAX_FEE_STROOPS = 100_000;
 export interface SubmitOptions {
   /** Wrap the envelope in a platform-funded fee bump (#161). Off by default. */
   sponsorFee?: boolean;
+}
+
+/** #143 — capped retries for a transient RPC call, before the circuit breaker sees it. */
+const MAX_RPC_RETRIES = 3;
+const INITIAL_RPC_BACKOFF_MS = 200;
+
+/** Network errors (no HTTP response) and 5xx — not a 4xx, which won't succeed on retry. */
+function isRetryableRpcError(error: unknown): boolean {
+  const status = (error as { response?: { status?: number } } | undefined)
+    ?.response?.status;
+  if (status !== undefined) return status >= 500;
+  return true; // no response at all: DNS, connection reset, timeout, etc.
+}
+
+async function withRetry<T>(
+  operation: () => Promise<T>,
+  maxRetries: number,
+  initialBackoffMs: number,
+): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      if (attempt === maxRetries || !isRetryableRpcError(error)) throw error;
+      const backoff = initialBackoffMs * 2 ** attempt;
+      const jitter = Math.random() * backoff * 0.3;
+      await new Promise((resolve) => setTimeout(resolve, backoff + jitter));
+    }
+  }
+  throw lastError;
 }
 
 @Injectable()
@@ -127,8 +162,12 @@ export class StellarService {
   constructor(private readonly config: ConfigService) {
     const rpcUrl = this.config.getOrThrow<string>('SOROBAN_RPC_URL');
     const network = this.config.getOrThrow<StellarNetwork>('STELLAR_NETWORK');
+    const rpcTimeoutMs =
+      this.config.get<number>('SOROBAN_RPC_TIMEOUT_MS') ??
+      DEFAULT_RPC_TIMEOUT_MS;
     this.server = new rpc.Server(rpcUrl, {
       allowHttp: rpcUrl.startsWith('http://'),
+      timeoutInSeconds: Math.ceil(rpcTimeoutMs / 1000),
     });
     this.contractId = this.config.getOrThrow<string>('TICKETING_CONTRACT_ID');
     this.contract = new Contract(this.contractId);
@@ -190,6 +229,20 @@ export class StellarService {
       nativeToScVal(chainEventId, { type: 'u64' }),
     ]);
     return { eventId: chainEventId, ...this.decodeEvent(result) };
+  }
+
+  /**
+   * Pings the Soroban RPC directly — no retry, no circuit breaker — so the
+   * latency and up/down result reflect the RPC's real state right now (#147).
+   */
+  async pingRpc(): Promise<{ up: boolean; latencyMs: number }> {
+    const start = Date.now();
+    try {
+      await this.server.getLatestLedger();
+      return { up: true, latencyMs: Date.now() - start };
+    } catch {
+      return { up: false, latencyMs: Date.now() - start };
+    }
   }
 
   buildCreateEventTx(params: {
@@ -590,7 +643,9 @@ export class StellarService {
   }
 
   private rpcCall<T>(operation: () => Promise<T>): Promise<T> {
-    return this.rpcCircuitBreaker.execute(operation);
+    return this.rpcCircuitBreaker.execute(() =>
+      withRetry(operation, MAX_RPC_RETRIES, INITIAL_RPC_BACKOFF_MS),
+    );
   }
 
   private decodeTicket(scVal: xdr.ScVal): OnChainTicket {
