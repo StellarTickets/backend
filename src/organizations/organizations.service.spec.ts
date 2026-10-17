@@ -165,6 +165,70 @@ describe('OrganizationsService', () => {
     });
   });
 
+  describe('organizer role lifecycle (#390)', () => {
+    beforeEach(() => {
+      prisma.organizationMember.findUnique.mockResolvedValue({
+        id: 'membership-1',
+      });
+      prisma.organization.update.mockResolvedValue({ id: 'org-1' });
+    });
+
+    it('demotes members left without any live organization on soft-delete', async () => {
+      prisma.organization.findUnique.mockResolvedValue(
+        createOrganization({ id: 'org-1', deletedAt: null }),
+      );
+
+      await service.softDelete('user-1', 'org-1');
+
+      expect(prisma.user.updateMany).toHaveBeenCalledWith({
+        where: {
+          role: 'ORGANIZER',
+          memberships: {
+            some: { organizationId: 'org-1' },
+            none: { organization: { deletedAt: null } },
+          },
+        },
+        data: { role: 'ATTENDEE' },
+      });
+      // The org must be marked deleted first, inside the same transaction,
+      // so the "no live membership" filter already excludes it.
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+      expect(
+        prisma.organization.update.mock.invocationCallOrder[0],
+      ).toBeLessThan(prisma.user.updateMany.mock.invocationCallOrder[0]);
+    });
+
+    it('re-promotes ATTENDEE members to ORGANIZER on restore', async () => {
+      prisma.organization.findUnique.mockResolvedValue({
+        ...createOrganization({ id: 'org-1' }),
+        deletedAt: new Date('2026-09-26T00:00:00.000Z'),
+      });
+
+      await service.restore('user-1', 'org-1');
+
+      expect(prisma.user.updateMany).toHaveBeenCalledWith({
+        where: {
+          role: 'ATTENDEE',
+          memberships: { some: { organizationId: 'org-1' } },
+        },
+        data: { role: 'ORGANIZER' },
+      });
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not demote anyone when the soft-delete write fails', async () => {
+      prisma.organization.findUnique.mockResolvedValue(
+        createOrganization({ id: 'org-1', deletedAt: null }),
+      );
+      prisma.organization.update.mockRejectedValue(new Error('write failed'));
+
+      await expect(service.softDelete('user-1', 'org-1')).rejects.toThrow(
+        'write failed',
+      );
+      expect(prisma.user.updateMany).not.toHaveBeenCalled();
+    });
+  });
+
   describe('assertMember', () => {
     it('throws ForbiddenException when the user is not a member', async () => {
       prisma.organizationMember.findUnique.mockResolvedValue(null);

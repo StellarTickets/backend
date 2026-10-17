@@ -1,6 +1,9 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import {
+  Controller,
+  Get,
   INestApplication,
+  UseGuards,
   ValidationPipe,
   VersioningType,
 } from '@nestjs/common';
@@ -10,6 +13,22 @@ import { randomUUID } from 'node:crypto';
 import { AppModule } from './../src/app.module';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { StellarService } from '../src/stellar/stellar.service';
+import { JwtAuthGuard } from '../src/auth/guards/jwt-auth.guard';
+import { RolesGuard } from '../src/auth/guards/roles.guard';
+import { Roles } from '../src/auth/decorators/roles.decorator';
+import { CurrentUser } from '../src/auth/decorators/current-user.decorator';
+import type { CurrentUserPayload } from '../src/auth/decorators/current-user.decorator';
+
+/** Test-only ORGANIZER-gated route: no production route uses RolesGuard yet (#388). */
+@Controller('role-probe')
+@UseGuards(JwtAuthGuard, RolesGuard)
+class RoleProbeController {
+  @Get()
+  @Roles('ORGANIZER')
+  probe(@CurrentUser() user: CurrentUserPayload) {
+    return { role: user.role };
+  }
+}
 
 // Requires a real DATABASE_URL (point it at a throwaway test database, as the
 // CI `e2e-test` job does) — same constraint as the other e2e specs. Exercises
@@ -31,6 +50,7 @@ describe('Auth flow (e2e)', () => {
   beforeAll(async () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
+      controllers: [RoleProbeController],
     })
       // Auth never touches the chain; don't require a real Soroban config.
       .overrideProvider(StellarService)
@@ -99,6 +119,10 @@ describe('Auth flow (e2e)', () => {
     it.each([
       ['an invalid email', { email: 'not-an-email' }],
       ['a password shorter than 10 characters', { password: 'short' }],
+      [
+        'a 100-character password (over 72 bytes)',
+        { password: 'a'.repeat(100) },
+      ],
       ['an empty name', { name: '' }],
       ['an unknown field', { role: 'ADMIN' }],
     ])('rejects %s with 400 and creates no account', async (_label, patch) => {
@@ -175,6 +199,54 @@ describe('Auth flow (e2e)', () => {
         stellarPublicKey: null,
       });
       expect(res.body).not.toHaveProperty('passwordHash');
+    });
+
+    it('rejects the still-unexpired token of a deleted user with 401 (#389)', async () => {
+      const doomedEmail = `deleted-${randomUUID()}@${emailDomain}`;
+      const registered = await request(server())
+        .post('/v1/auth/register')
+        .send({ email: doomedEmail, password, name })
+        .expect(201);
+      const { accessToken, user } = registered.body as AuthBody;
+
+      await request(server())
+        .get('/v1/users/me')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .expect(200);
+
+      await prisma.user.delete({ where: { id: user.id } });
+
+      await request(server())
+        .get('/v1/users/me')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .expect(401);
+    });
+
+    it('applies a role changed in the database to the next request (#388)', async () => {
+      const registered = await request(server())
+        .post('/v1/auth/register')
+        .send({ email: `role-${randomUUID()}@${emailDomain}`, password, name })
+        .expect(201);
+      const { accessToken, user } = registered.body as AuthBody;
+      const probe = () =>
+        request(server())
+          .get('/v1/role-probe')
+          .set('Authorization', `Bearer ${accessToken}`);
+
+      await probe().expect(403);
+
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { role: 'ORGANIZER' },
+      });
+      const promoted = await probe().expect(200);
+      expect(promoted.body).toEqual({ role: 'ORGANIZER' });
+
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { role: 'ATTENDEE' },
+      });
+      await probe().expect(403);
     });
 
     it('rejects a request without a token with 401', async () => {

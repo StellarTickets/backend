@@ -82,9 +82,24 @@ export class OrganizationsService {
   async softDelete(userId: string, id: string) {
     await this.findOne(id);
     await this.assertMember(id, userId);
-    const org = await this.prisma.organization.update({
-      where: { id },
-      data: { deletedAt: new Date() },
+    const org = await this.prisma.$transaction(async (tx) => {
+      const deleted = await tx.organization.update({
+        where: { id },
+        data: { deletedAt: new Date() },
+      });
+      // #390 — an ORGANIZER is a member of at least one live organization.
+      // Demote this org's members that no longer are, in one statement.
+      await tx.user.updateMany({
+        where: {
+          role: UserRole.ORGANIZER,
+          memberships: {
+            some: { organizationId: id },
+            none: { organization: { deletedAt: null } },
+          },
+        },
+        data: { role: UserRole.ATTENDEE },
+      });
+      return deleted;
     });
     await this.audit?.record(userId, 'organization.delete', 'Organization', id);
     return org;
@@ -97,9 +112,20 @@ export class OrganizationsService {
       throw new NotFoundException('Organization not found');
     }
     await this.assertMember(id, userId);
-    const restored = await this.prisma.organization.update({
-      where: { id },
-      data: { deletedAt: null },
+    const restored = await this.prisma.$transaction(async (tx) => {
+      const live = await tx.organization.update({
+        where: { id },
+        data: { deletedAt: null },
+      });
+      // #390 — members regain ORGANIZER once the organization is live again.
+      await tx.user.updateMany({
+        where: {
+          role: UserRole.ATTENDEE,
+          memberships: { some: { organizationId: id } },
+        },
+        data: { role: UserRole.ORGANIZER },
+      });
+      return live;
     });
     await this.audit?.record(
       userId,
