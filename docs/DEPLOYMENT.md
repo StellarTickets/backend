@@ -150,29 +150,53 @@ The application uses PostgreSQL with Prisma ORM. Production migrations must be a
 
 Verify that the deployment was successful and the application is handling requests:
 
-### 1. Health Check Endpoint
+### 1. Health & Readiness Probes
 
-Query the versioned health endpoint:
+The application provides unversioned, root-level health probes for load balancers and container orchestrators (e.g. Kubernetes, AWS ECS, Docker):
 
-```bash
-curl -i http://localhost:3000/v1/health
-```
+- **Liveness Probe (`GET /health/live`)**:
+  Confirms the process is running and responding to HTTP traffic.
+  ```bash
+  curl -i http://localhost:3000/health/live
+  ```
+  Expected output (HTTP 200 OK):
+  ```json
+  {"status":"ok"}
+  ```
 
-Expected output:
-```json
-HTTP/1.1 200 OK
-Content-Type: application/json; charset=utf-8
+- **Readiness Probe (`GET /health/ready`)**:
+  Verifies database connectivity by executing a live probe query against PostgreSQL via Prisma. Returns HTTP 200 when connected, or HTTP 503 Service Unavailable when database connectivity is down.
+  ```bash
+  curl -i http://localhost:3000/health/ready
+  ```
+  Expected output (HTTP 200 OK):
+  ```json
+  {"status":"ok","database":"connected"}
+  ```
+  Failure output (HTTP 503 Service Unavailable):
+  ```json
+  {"statusCode":503,"status":"error","database":"disconnected","message":"Database connection failed"}
+  ```
 
-{"status":"ok","service":"stellar-tickets-backend"}
-```
+- **Service Status (`GET /health` or `GET /v1/health`)**:
+  General health and service identifier:
+  ```bash
+  curl -i http://localhost:3000/health
+  ```
+  Expected output (HTTP 200 OK):
+  ```json
+  {"status":"ok","service":"stellar-tickets-backend"}
+  ```
 
 ### 2. Verification Checklist
 
-- [x] `/v1/health` responds with HTTP 200 OK.
+- [x] `/health/live` responds with HTTP 200 OK.
+- [x] `/health/ready` responds with HTTP 200 OK (or 503 if DB is unreachable).
+- [x] `/health` responds with HTTP 200 OK.
 - [x] Database connections operate normally without migration warnings.
 - [x] Soroban RPC endpoint is reachable by the service.
 - [x] Outbound webhooks (if enabled) connect to Redis cleanly.
-- [x] Logs output structured Nest logs without uncaught exception errors.
+- [x] Logs output structured logs without uncaught exception errors.
 
 ---
 

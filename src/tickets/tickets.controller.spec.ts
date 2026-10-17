@@ -273,7 +273,7 @@ describe('TicketsController', () => {
       await http()
         .post('/tickets/confirm-issue')
         .set(AUTH)
-        .send({ ...body, signedXdr: 'sx' })
+        .send({ ...body, signedXdr: 'AAAA' })
         .expect(201);
       expect(service.confirmIssue).toHaveBeenCalledWith(
         uid,
@@ -281,7 +281,7 @@ describe('TicketsController', () => {
         UUID2,
         KEY,
         'A1',
-        'sx',
+        'AAAA',
       );
     });
 
@@ -298,7 +298,7 @@ describe('TicketsController', () => {
       const res = await http()
         .post('/tickets/confirm-issue')
         .set(AUTH)
-        .send({ ...body, signedXdr: 'sx' })
+        .send({ ...body, signedXdr: 'AAAA' })
         .expect(409);
       expect((res.body as { message: string }).message).toBe('Seat taken');
     });
@@ -336,7 +336,7 @@ describe('TicketsController', () => {
         .send({
           ticketTypeId: UUID,
           seat: 'B2',
-          signedXdr: 'sx',
+          signedXdr: 'AAAA',
           promoCode: 'SAVE10',
         })
         .expect(201);
@@ -344,7 +344,7 @@ describe('TicketsController', () => {
         uid,
         UUID,
         'B2',
-        'sx',
+        'AAAA',
         'SAVE10',
       );
     });
@@ -395,21 +395,21 @@ describe('TicketsController', () => {
       await http()
         .post('/tickets/t1/confirm-transfer')
         .set(AUTH)
-        .send({ ...body, signedXdr: 'sx' })
+        .send({ ...body, signedXdr: 'AAAA' })
         .expect(201);
       expect(service.confirmTransfer).toHaveBeenCalledWith(
         uid,
         't1',
         UUID2,
         KEY,
-        'sx',
+        'AAAA',
       );
 
       service.confirmTransfer.mockRejectedValueOnce(new NotFoundException());
       await http()
         .post('/tickets/t9/confirm-transfer')
         .set(AUTH)
-        .send({ ...body, signedXdr: 'sx' })
+        .send({ ...body, signedXdr: 'AAAA' })
         .expect(404);
     });
   });
@@ -426,12 +426,12 @@ describe('TicketsController', () => {
       await http()
         .post('/tickets/t1/confirm-check-in')
         .set(AUTH)
-        .send({ signedXdr: 'sx', gateId: UUID, reason: 'override' })
+        .send({ signedXdr: 'AAAA', gateId: UUID, reason: 'override' })
         .expect(201);
       expect(service.confirmCheckIn).toHaveBeenCalledWith(
         uid,
         't1',
-        'sx',
+        'AAAA',
         UUID,
         'override',
       );
@@ -441,7 +441,7 @@ describe('TicketsController', () => {
       await http()
         .post('/tickets/t1/confirm-check-in')
         .set(AUTH)
-        .send({ signedXdr: 'sx', gateId: 'gate' })
+        .send({ signedXdr: 'AAAA', gateId: 'gate' })
         .expect(400);
       expect(service.confirmCheckIn).not.toHaveBeenCalled();
     });
@@ -459,16 +459,16 @@ describe('TicketsController', () => {
       await http()
         .post('/tickets/t1/confirm-revoke')
         .set(AUTH)
-        .send({ signedXdr: 'sx' })
+        .send({ signedXdr: 'AAAA' })
         .expect(201);
-      expect(service.confirmRevoke).toHaveBeenCalledWith(uid, 't1', 'sx');
+      expect(service.confirmRevoke).toHaveBeenCalledWith(uid, 't1', 'AAAA');
     });
 
     it('POST /:ticketId/confirm-revoke rejects a bad txHash', async () => {
       await http()
         .post('/tickets/t1/confirm-revoke')
         .set(AUTH)
-        .send({ signedXdr: 'sx', txHash: 'nope' })
+        .send({ signedXdr: 'AAAA', txHash: 'nope' })
         .expect(400);
     });
 
@@ -531,13 +531,13 @@ describe('TicketsController', () => {
       await http()
         .post('/tickets/t1/confirm-list-resale')
         .set(AUTH)
-        .send({ price: '5000', signedXdr: 'sx', expiresAt })
+        .send({ price: '5000', signedXdr: 'AAAA', expiresAt })
         .expect(201);
       expect(service.confirmListForResale).toHaveBeenCalledWith(
         uid,
         't1',
         '5000',
-        'sx',
+        'AAAA',
         expiresAt,
       );
     });
@@ -594,9 +594,9 @@ describe('TicketsController', () => {
       await http()
         .post('/tickets/t1/confirm-buy-resale')
         .set(AUTH)
-        .send({ signedXdr: 'sx' })
+        .send({ signedXdr: 'AAAA' })
         .expect(201);
-      expect(service.confirmBuyResale).toHaveBeenCalledWith(uid, 't1', 'sx');
+      expect(service.confirmBuyResale).toHaveBeenCalledWith(uid, 't1', 'AAAA');
 
       service.confirmBuyResale.mockRejectedValueOnce(
         new ConflictException('Already sold'),
@@ -604,7 +604,7 @@ describe('TicketsController', () => {
       await http()
         .post('/tickets/t1/confirm-buy-resale')
         .set(AUTH)
-        .send({ signedXdr: 'sx' })
+        .send({ signedXdr: 'AAAA' })
         .expect(409);
     });
   });

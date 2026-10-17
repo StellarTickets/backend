@@ -20,6 +20,7 @@ describe('EventsController', () => {
   const service = {
     findPublished: jest.fn(),
     getWithOrg: jest.fn(),
+    getWithReconciliation: jest.fn(),
     findForOrganization: jest.fn(),
     summarizeForOrganization: jest.fn(),
     create: jest.fn(),
@@ -74,11 +75,11 @@ describe('EventsController', () => {
     });
 
     it('GET /events/:eventId returns one event and propagates not-found', async () => {
-      service.getWithOrg.mockResolvedValueOnce({ id: 'e1' });
+      service.getWithReconciliation.mockResolvedValueOnce({ id: 'e1' });
       await http().get('/events/e1').expect(200);
-      expect(service.getWithOrg).toHaveBeenCalledWith('e1');
+      expect(service.getWithReconciliation).toHaveBeenCalledWith('e1', false);
 
-      service.getWithOrg.mockRejectedValueOnce(
+      service.getWithReconciliation.mockRejectedValueOnce(
         new NotFoundException('Event not found'),
       );
       const res = await http().get('/events/nope').expect(404);
@@ -267,12 +268,12 @@ describe('EventsController', () => {
         await http()
           .post('/events/e1/confirm-publish')
           .set(AUTH)
-          .send({ signedXdr: 'signed', txHash: 'a'.repeat(64) })
+          .send({ signedXdr: 'AAAA', txHash: 'a'.repeat(64) })
           .expect(201);
         expect(service.confirmPublish).toHaveBeenCalledWith(
           TEST_USER.userId,
           'e1',
-          'signed',
+          'AAAA',
         );
       });
 

@@ -23,6 +23,11 @@ class EnvironmentVariables {
   @IsIn(['development', 'test', 'production'])
   NODE_ENV!: string;
 
+  /// Log level for pino logger: fatal, error, warn, info, debug, trace, silent.
+  @IsIn(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'])
+  @IsOptional()
+  LOG_LEVEL?: string;
+
   /// Opt in to HTTP/NestJS OpenTelemetry spans. Off unless literally 'true'.
   /// See docs/TRACING.md.
   @IsIn(['true', 'false'])

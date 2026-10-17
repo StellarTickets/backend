@@ -416,4 +416,19 @@ describe('env.validate', () => {
       ).not.toThrow();
     });
   });
+
+  describe('LOG_LEVEL', () => {
+    it.each(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'])(
+      'accepts valid log level %s',
+      (level) => {
+        expect(() => validate(validConfig({ LOG_LEVEL: level }))).not.toThrow();
+      },
+    );
+
+    it('rejects an invalid log level', () => {
+      expect(() =>
+        validate(validConfig({ LOG_LEVEL: 'verbose-garbage' })),
+      ).toThrow(/LOG_LEVEL/);
+    });
+  });
 });
