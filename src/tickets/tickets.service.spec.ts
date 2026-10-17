@@ -259,6 +259,100 @@ describe('TicketsService', () => {
     });
   });
 
+  describe('buildIssueBatch (#133)', () => {
+    beforeEach(() => {
+      prisma.ticketType.findUnique.mockResolvedValue(buildTicketType());
+    });
+
+    it('rejects a batch that exceeds the configured maximum size', async () => {
+      config.get.mockReturnValue(2);
+      const recipients = [
+        { toUserId: 'u1', toPublicKey: 'GPUBKEY1' },
+        { toUserId: 'u2', toPublicKey: 'GPUBKEY2' },
+        { toUserId: 'u3', toPublicKey: 'GPUBKEY3' },
+      ];
+
+      await expect(
+        service.buildIssueBatch('organizer-1', 'tt-1', recipients),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('returns one unsignedXdr per valid recipient', async () => {
+      config.get.mockReturnValue(50);
+      prisma.user.findUnique
+        .mockResolvedValueOnce(
+          createUser({ id: 'u1', stellarPublicKey: 'GPUBKEY1' }),
+        )
+        .mockResolvedValueOnce(
+          createUser({ id: 'u2', stellarPublicKey: 'GPUBKEY2' }),
+        );
+
+      const result = await service.buildIssueBatch('organizer-1', 'tt-1', [
+        { toUserId: 'u1', toPublicKey: 'GPUBKEY1', seat: 'A1' },
+        { toUserId: 'u2', toPublicKey: 'GPUBKEY2' },
+      ]);
+
+      expect(result.total).toBe(2);
+      expect(result.succeeded).toBe(2);
+      expect(result.failed).toBe(0);
+      expect(stellar.buildIssueTicketTx).toHaveBeenCalledTimes(2);
+    });
+
+    it('collects per-recipient errors without aborting the batch', async () => {
+      config.get.mockReturnValue(50);
+      // u1 not found, u2 succeeds
+      prisma.user.findUnique
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(
+          createUser({ id: 'u2', stellarPublicKey: 'GPUBKEY2' }),
+        );
+
+      const result = await service.buildIssueBatch('organizer-1', 'tt-1', [
+        { toUserId: 'u1', toPublicKey: 'GPUBKEY1' },
+        { toUserId: 'u2', toPublicKey: 'GPUBKEY2' },
+      ]);
+
+      expect(result.total).toBe(2);
+      expect(result.succeeded).toBe(1);
+      expect(result.failed).toBe(1);
+      const errorResult = result.results.find((r) => r.toUserId === 'u1');
+      expect(errorResult?.status).toBe('error');
+    });
+
+    it('rejects a recipient whose provided public key does not match their stored wallet', async () => {
+      config.get.mockReturnValue(50);
+      prisma.user.findUnique.mockResolvedValue(
+        createUser({ id: 'u1', stellarPublicKey: 'GACTUALKEY' }),
+      );
+
+      const result = await service.buildIssueBatch('organizer-1', 'tt-1', [
+        { toUserId: 'u1', toPublicKey: 'GDIFFERENTKEY' },
+      ]);
+
+      expect(result.failed).toBe(1);
+      expect(result.results[0]?.status).toBe('error');
+      expect(stellar.buildIssueTicketTx).not.toHaveBeenCalled();
+    });
+
+    it('rejects a batch for an unpublished event', async () => {
+      prisma.ticketType.findUnique.mockResolvedValue(
+        buildTicketType({
+          event: {
+            ...buildTicketType().event,
+            status: 'DRAFT',
+            chainEventId: null,
+          },
+        }),
+      );
+
+      await expect(
+        service.buildIssueBatch('organizer-1', 'tt-1', [
+          { toUserId: 'u1', toPublicKey: 'GPUBKEY1' },
+        ]),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+  });
+
   describe('buildPurchaseTx', () => {
     it('rejects purchase against a DRAFT event (400) (#383)', async () => {
       prisma.ticketType.findUnique.mockResolvedValue(

@@ -159,6 +159,105 @@ export class TicketsService {
     }
   }
 
+  // ---- Batch organizer-authorized issuance ----
+
+  /**
+   * #133 — Builds one `issue_ticket` transaction envelope per recipient in
+   * `recipients`, up to `ISSUE_BATCH_MAX_SIZE` at once (default 50).
+   *
+   * The batch is processed optimistically: each recipient is attempted
+   * independently, so a failure for one (e.g. seat conflict, user not found)
+   * is collected and returned alongside the successful payloads rather than
+   * aborting the whole request. Callers iterate `results` and re-drive any
+   * `status: "error"` entries individually.
+   *
+   * Only the build step is batched here. Each recipient still calls
+   * `POST /tickets/confirm-issue` individually so the Stellar transaction
+   * submission and DB writes remain atomic per ticket.
+   */
+  async buildIssueBatch(
+    userId: string,
+    ticketTypeId: string,
+    recipients: Array<{ toUserId: string; toPublicKey: string; seat?: string }>,
+  ) {
+    const maxBatchSize =
+      this.config?.get<number>('ISSUE_BATCH_MAX_SIZE') ?? 50;
+    if (recipients.length > maxBatchSize) {
+      throw new BadRequestException(
+        `Batch size exceeds the maximum of ${maxBatchSize} recipients`,
+      );
+    }
+
+    const { ticketType, event } =
+      await this.getTicketTypeWithEvent(ticketTypeId);
+    await this.organizations.assertMember(event.organizationId, userId);
+
+    if (event.status !== EventStatus.PUBLISHED || event.chainEventId === null) {
+      throw new BadRequestException(
+        event.status === EventStatus.CANCELLED
+          ? 'Event has been cancelled'
+          : 'Event has not been published on-chain yet',
+      );
+    }
+
+    const results = await Promise.all(
+      recipients.map(async ({ toUserId, toPublicKey, seat }) => {
+        try {
+          const toUser = await this.prisma.user.findUnique({
+            where: { id: toUserId },
+          });
+          if (!toUser) {
+            return {
+              toUserId,
+              status: 'error' as const,
+              error: 'User not found',
+            };
+          }
+          if (!toUser.stellarPublicKey) {
+            return {
+              toUserId,
+              status: 'error' as const,
+              error:
+                'Connect a Stellar wallet to your account before continuing',
+            };
+          }
+          if (toUser.stellarPublicKey !== toPublicKey) {
+            return {
+              toUserId,
+              status: 'error' as const,
+              error: 'Recipient public key does not match target user',
+            };
+          }
+
+          const unsignedXdr = await this.stellar.buildIssueTicketTx({
+            organizerPublicKey: event.organization.stellarAccount,
+            chainEventId: event.chainEventId!,
+            toPublicKey: toUser.stellarPublicKey,
+            tier: ticketType.name,
+            seat: seat ?? UNASSIGNED_SEAT,
+            price: ticketType.price,
+          });
+
+          return { toUserId, status: 'ok' as const, unsignedXdr };
+        } catch (err) {
+          return {
+            toUserId,
+            status: 'error' as const,
+            error: (err as Error).message ?? 'Unknown error',
+          };
+        }
+      }),
+    );
+
+    return {
+      ticketTypeId,
+      total: recipients.length,
+      succeeded: results.filter((r) => r.status === 'ok').length,
+      failed: results.filter((r) => r.status === 'error').length,
+      results,
+    };
+  }
+
   // ---- Fully on-chain primary sale ----
 
   async buildPurchaseTx(

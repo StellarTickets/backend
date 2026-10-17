@@ -3,6 +3,7 @@ import {
   INTERCEPTORS_METADATA,
 } from '@nestjs/common/constants';
 import {
+  BadRequestException,
   ConflictException,
   INestApplication,
   NotFoundException,
@@ -39,6 +40,7 @@ describe('TicketsController', () => {
     getOfflineToken: jest.fn(),
     buildIssueTx: jest.fn(),
     confirmIssue: jest.fn(),
+    buildIssueBatch: jest.fn(),
     buildPurchaseTx: jest.fn(),
     confirmPurchase: jest.fn(),
     buildTransferTx: jest.fn(),
@@ -118,6 +120,7 @@ describe('TicketsController', () => {
     ['get', '/tickets/by-chain/1'],
     ['get', `/tickets/${UUID}/offline-token`],
     ['post', '/tickets/issue'],
+    ['post', '/tickets/issue-batch'],
     ['post', '/tickets/confirm-issue'],
     ['post', '/tickets/purchase'],
     ['post', '/tickets/confirm-purchase'],
@@ -301,6 +304,71 @@ describe('TicketsController', () => {
         .send({ ...body, signedXdr: 'sx' })
         .expect(409);
       expect((res.body as { message: string }).message).toBe('Seat taken');
+    });
+
+    it('POST /confirm-issue returns 409 when the seat is already taken for the event (#135)', async () => {
+      service.confirmIssue.mockRejectedValue(
+        new ConflictException('That seat has already been issued for this event'),
+      );
+      const res = await http()
+        .post('/tickets/confirm-issue')
+        .set(AUTH)
+        .send({ ...body, signedXdr: 'sx' })
+        .expect(409);
+      expect((res.body as { message: string }).message).toBe(
+        'That seat has already been issued for this event',
+      );
+    });
+  });
+
+  describe('issue-batch', () => {
+    const recipient = { toUserId: UUID2, toPublicKey: KEY };
+    const body = { ticketTypeId: UUID, recipients: [recipient] };
+
+    it('POST /issue-batch forwards ticketTypeId and recipients to the service', async () => {
+      service.buildIssueBatch.mockResolvedValue({ total: 1, succeeded: 1, failed: 0, results: [] });
+      await http().post('/tickets/issue-batch').set(AUTH).send(body).expect(201);
+      expect(service.buildIssueBatch).toHaveBeenCalledWith(uid, UUID, [recipient]);
+    });
+
+    it('POST /issue-batch rejects a non-UUID ticketTypeId', async () => {
+      await http()
+        .post('/tickets/issue-batch')
+        .set(AUTH)
+        .send({ ...body, ticketTypeId: 'not-uuid' })
+        .expect(400);
+      expect(service.buildIssueBatch).not.toHaveBeenCalled();
+    });
+
+    it('POST /issue-batch rejects an empty recipients array', async () => {
+      await http()
+        .post('/tickets/issue-batch')
+        .set(AUTH)
+        .send({ ticketTypeId: UUID, recipients: [] })
+        .expect(400);
+      expect(service.buildIssueBatch).not.toHaveBeenCalled();
+    });
+
+    it('POST /issue-batch rejects a recipient with an invalid public key', async () => {
+      await http()
+        .post('/tickets/issue-batch')
+        .set(AUTH)
+        .send({ ticketTypeId: UUID, recipients: [{ toUserId: UUID2, toPublicKey: 'bad' }] })
+        .expect(400);
+      expect(service.buildIssueBatch).not.toHaveBeenCalled();
+    });
+
+    it('POST /issue-batch returns 400 when the batch exceeds the configured max size', async () => {
+      service.buildIssueBatch.mockRejectedValue(
+        new BadRequestException('Batch size exceeds the maximum of 50 recipients'),
+      );
+      const bigBatch = Array.from({ length: 51 }, () => recipient);
+      const res = await http()
+        .post('/tickets/issue-batch')
+        .set(AUTH)
+        .send({ ticketTypeId: UUID, recipients: bigBatch })
+        .expect(400);
+      expect((res.body as { message: string }).message).toContain('Batch size exceeds');
     });
   });
 

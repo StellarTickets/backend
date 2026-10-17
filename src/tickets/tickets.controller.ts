@@ -30,6 +30,7 @@ import { ConfirmListForResaleDto } from './dto/confirm-list-for-resale.dto';
 import { UpdateResalePriceDto } from './dto/update-resale-price.dto';
 import { ResaleListingsQueryDto } from './dto/resale-listings-query.dto';
 import { RevokeBatchDto } from './dto/revoke-batch.dto';
+import { IssueBatchDto } from './dto/issue-batch.dto';
 
 /** Parses a route param into the BigInt `chainTicketId`, treating a malformed value as "not found". */
 function parseChainTicketId(raw: string): bigint {
@@ -106,6 +107,19 @@ export class TicketsController {
       dto.toUserId,
       dto.toPublicKey,
       dto.seat,
+    );
+  }
+
+  /** #133 — Batch-build issue_ticket envelopes, one per recipient (up to ISSUE_BATCH_MAX_SIZE). */
+  @Post('issue-batch')
+  buildIssueBatch(
+    @CurrentUser() user: CurrentUserPayload,
+    @Body() dto: IssueBatchDto,
+  ) {
+    return this.ticketsService.buildIssueBatch(
+      user.userId,
+      dto.ticketTypeId,
+      dto.recipients,
     );
   }
 
