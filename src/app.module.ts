@@ -24,6 +24,7 @@ import { AuditModule } from './audit/audit.module';
 import { CacheModule } from './common/cache/cache.module';
 import { SchedulerModule } from './scheduler/scheduler.module';
 import { WebhooksModule } from './webhooks/webhooks.module';
+import { RefundsModule } from './refunds/refunds.module';
 import { TracingShutdownService } from './tracing';
 import { BigIntSerializerInterceptor } from './common/interceptors/bigint-serializer.interceptor';
 import { RequestTimeoutInterceptor } from './common/interceptors/request-timeout.interceptor';
@@ -34,6 +35,7 @@ import { HealthModule } from './health/health.module';
 @Module({
   imports: [
     HealthModule,
+    RefundsModule,
     ConfigModule.forRoot({ isGlobal: true, validate }),
     LoggerModule.forRootAsync({
       imports: [ConfigModule],

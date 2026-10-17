@@ -54,6 +54,22 @@ enum TicketStatus {
   RESALE
 }
 
+/// Off-chain record of a primary-sale refund for a REVOKED ticket (#141).
+/// The chain has no refund concept; this tracks the admin-driven payout.
+enum RefundStatus {
+  PENDING
+  COMPLETED
+}
+
+model Refund {
+  id          String       @id @default(uuid())
+  ticket      Ticket       @relation(fields: [ticketId], references: [id])
+  ticketId    String       @unique
+  status      RefundStatus @default(PENDING)
+  createdAt   DateTime     @default(now())
+  completedAt DateTime?
+}
+
 enum ResaleListingStatus {
   ACTIVE
   SOLD
@@ -214,6 +230,7 @@ model Ticket {
   checkedInGateId String?
   resaleListings ResaleListing[]
   promoRedemption PromoCodeRedemption?
+  refund         Refund?
   createdAt      DateTime        @default(now())
   updatedAt      DateTime        @updatedAt
 

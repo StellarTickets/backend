@@ -179,6 +179,12 @@ class EnvironmentVariables {
   @IsStellarContractId()
   TICKETING_CONTRACT_ID!: string;
 
+  /// Timeout, in milliseconds, for a single Soroban RPC call before it's
+  /// treated as failed. Default 10000 (10s). See issue #145.
+  @IsInt()
+  @IsOptional()
+  SOROBAN_RPC_TIMEOUT_MS?: number;
+
   /// Platform hot wallet used only as a disposable source account for
   /// read-only contract simulations (verify_ticket, get_event). It signs
   /// nothing and is never used for a write. See docs/NON_CUSTODIAL.md.
