@@ -431,9 +431,10 @@ export class TicketsService {
         where: { ticketId, status: ResaleListingStatus.ACTIVE },
         data: { status: ResaleListingStatus.CANCELLED },
       });
+      const newQrSecret = crypto.randomBytes(32).toString('hex');
       const transferred = await tx.ticket.update({
         where: { id: ticketId },
-        data: { ownerId: toUserId, status: TicketStatus.VALID },
+        data: { ownerId: toUserId, status: TicketStatus.VALID, qrSecret: newQrSecret },
       });
       await this.recordProcessedTx(tx, signedXdr, 'transfer', transferred);
       return transferred;
@@ -970,21 +971,51 @@ export class TicketsService {
     });
   }
 
-  async findActiveResaleListings(cursor?: string, limit = 20) {
-    const take = Math.min(Math.max(limit, 1), 100);
-    const cursorFilter = cursor ? this.resaleCursorWhere(cursor) : undefined;
+  async findActiveResaleListings(
+    queryOptions?: {
+      cursor?: string;
+      limit?: number;
+      sortBy?: string;
+      sortOrder?: string;
+      eventId?: string;
+      minPrice?: number;
+      maxPrice?: number;
+    } | string,
+    legacyLimit = 20,
+  ) {
+    const opts = typeof queryOptions === 'string'
+      ? { cursor: queryOptions, limit: legacyLimit }
+      : (queryOptions ?? {});
+
+    const take = Math.min(Math.max(opts.limit ?? 20, 1), 100);
+    const cursorFilter = opts.cursor ? this.resaleCursorWhere(opts.cursor) : undefined;
+
+    const where: any = {
+      status: ResaleListingStatus.ACTIVE,
+      ...(cursorFilter ?? {}),
+    };
+
+    if (opts.eventId) {
+      where.ticket = { eventId: opts.eventId };
+    }
+
+    if (opts.minPrice !== undefined || opts.maxPrice !== undefined) {
+      where.price = {
+        ...(opts.minPrice !== undefined ? { gte: BigInt(opts.minPrice) } : {}),
+        ...(opts.maxPrice !== undefined ? { lte: BigInt(opts.maxPrice) } : {}),
+      };
+    }
+
+    const sortField = opts.sortBy === 'price' ? 'price' : 'createdAt';
+    const sortDirection = opts.sortOrder === 'asc' ? 'asc' : 'desc';
 
     const rows = await this.prisma.resaleListing.findMany({
-      where: {
-        status: ResaleListingStatus.ACTIVE,
-        ...(cursorFilter ?? {}),
-      },
+      where,
       include: {
         ticket: { include: { event: true, ticketType: true } },
         seller: { select: { name: true } },
       },
-      // createdAt + id keeps the order stable when timestamps collide.
-      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      orderBy: [{ [sortField]: sortDirection }, { id: 'desc' }],
       take: take + 1,
     });
 
@@ -1011,6 +1042,42 @@ export class TicketsService {
     });
 
     return { items: enrichedItems, nextCursor, limit: take };
+  }
+
+  /** Get complete ticket audit history (Issue #123) */
+  async getTicketHistory(userId: string, ticketId: string) {
+    const ticket = await this.prisma.ticket.findUnique({
+      where: { id: ticketId },
+      include: {
+        event: true,
+        ticketType: true,
+        owner: { select: { id: true, name: true, stellarPublicKey: true } },
+      },
+    });
+
+    if (!ticket) {
+      throw new NotFoundException('Ticket not found');
+    }
+
+    const [processedTxs, resaleListings] = await Promise.all([
+      this.prisma.processedTransaction.findMany({
+        where: { ticketId },
+        orderBy: { createdAt: 'desc' },
+      }),
+      this.prisma.resaleListing.findMany({
+        where: { ticketId },
+        include: { priceHistory: true },
+        orderBy: { createdAt: 'desc' },
+      }),
+    ]);
+
+    return {
+      ticket,
+      history: {
+        transactions: processedTxs,
+        resaleListings,
+      },
+    };
   }
 
   findMine(userId: string, status?: TicketStatus) {

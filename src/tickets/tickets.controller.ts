@@ -48,10 +48,7 @@ export class TicketsController {
 
   @Get('resale')
   findActiveResaleListings(@Query() query: ResaleListingsQueryDto) {
-    return this.ticketsService.findActiveResaleListings(
-      query.cursor,
-      query.limit,
-    );
+    return this.ticketsService.findActiveResaleListings(query);
   }
 
   @Get('mine')
@@ -85,6 +82,14 @@ export class TicketsController {
       user.userId,
       parseChainTicketId(chainTicketId),
     );
+  }
+
+  @Get(':ticketId/history')
+  getTicketHistory(
+    @CurrentUser() user: CurrentUserPayload,
+    @Param('ticketId') ticketId: string,
+  ) {
+    return this.ticketsService.getTicketHistory(user.userId, ticketId);
   }
 
   @Get(':ticketId/offline-token')
