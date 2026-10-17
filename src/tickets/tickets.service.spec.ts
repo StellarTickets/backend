@@ -463,7 +463,7 @@ describe('TicketsService', () => {
             'signed-xdr',
           ),
         ).rejects.toThrow(
-          new ConflictException(
+          new BadRequestException(
             `Signed transaction ${label} does not match the request`,
           ),
         );
@@ -488,7 +488,7 @@ describe('TicketsService', () => {
           'A1',
           'signed-xdr',
         ),
-      ).rejects.toBeInstanceOf(ConflictException);
+      ).rejects.toBeInstanceOf(BadRequestException);
       expect(stellar.submitSignedTransaction).not.toHaveBeenCalled();
     });
 
@@ -558,7 +558,7 @@ describe('TicketsService', () => {
         await expect(
           service.confirmPurchase('buyer-1', 'tt-1', 'A1', 'signed-xdr'),
         ).rejects.toThrow(
-          new ConflictException(
+          new BadRequestException(
             `Signed transaction ${label} does not match the request`,
           ),
         );
@@ -790,7 +790,8 @@ describe('TicketsService', () => {
         eventId: 'event-1',
         chainTicketId: 7n,
         status: 'VALID',
-        event: { organizationId: 'org-1', organization: {} },
+        chainTicketId: 7n,
+        event: { organizationId: 'org-1', organization: { stellarAccount: 'GORG' } },
       });
 
       const token = await service.getOfflineToken('staff-1', 'ticket-1');
@@ -825,7 +826,8 @@ describe('TicketsService', () => {
         eventId: 'event-1',
         chainTicketId: 7n,
         status: 'VALID',
-        event: { organizationId: 'org-1', organization: {} },
+        chainTicketId: 7n,
+        event: { organizationId: 'org-1', organization: { stellarAccount: 'GORG' } },
       });
       organizations.assertMember.mockRejectedValueOnce(
         new ForbiddenException('You are not a member of this organization'),
@@ -994,7 +996,7 @@ describe('TicketsService', () => {
           'signed-xdr',
         ),
       ).rejects.toThrow(
-        new ConflictException(
+        new BadRequestException(
           'Signed transaction price does not match the request',
         ),
       );
@@ -1560,11 +1562,17 @@ describe('TicketsService', () => {
   // ---- confirmCheckIn / confirmRevoke status updates (#413) ----
 
   describe('confirmCheckIn — status update', () => {
+    beforeEach(() => mockSignedCall('check_in', ['GORG', 7n]));
+
     const ticketRow = {
       id: 'ticket-1',
       eventId: 'event-1',
       ownerId: 'owner-1',
-      event: { organizationId: 'org-1', organization: {} },
+      chainTicketId: 7n,
+      event: {
+        organizationId: 'org-1',
+        organization: { stellarAccount: 'GORG' },
+      },
     };
 
     it('writes USED status and checkedInAt after a successful submission', async () => {
@@ -1622,6 +1630,8 @@ describe('TicketsService', () => {
   });
 
   describe('confirmRevoke — status update', () => {
+    beforeEach(() => mockSignedCall('revoke_ticket', ['GORG', 7n]));
+
     const ticketRow = {
       id: 'ticket-1',
       eventId: 'event-1',
@@ -1760,13 +1770,87 @@ describe('TicketsService', () => {
 
   // ---- Check-in with reason (#266) ----
 
+  describe('signed invocation guard on confirm paths (#157)', () => {
+    it('rejects a check-in envelope for a different ticket with a 400', async () => {
+      mockSignedCall('check_in', ['GORG', 8n]);
+      prisma.ticket.findUnique.mockResolvedValue({
+        id: 'ticket-1',
+        eventId: 'event-1',
+        ownerId: 'owner-1',
+        chainTicketId: 7n,
+        event: { organizationId: 'org-1', organization: { stellarAccount: 'GORG' } },
+      });
+
+      await expect(
+        service.confirmCheckIn('user-1', 'ticket-1', 'signed-xdr'),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(stellar.submitSignedTransaction).not.toHaveBeenCalled();
+      expect(prisma.ticket.update).not.toHaveBeenCalled();
+    });
+
+    it('rejects a revoke envelope that calls another function with a 400', async () => {
+      mockSignedCall('check_in', ['GORG', 7n]);
+      prisma.ticket.findUnique.mockResolvedValue({
+        id: 'ticket-1',
+        eventId: 'event-1',
+        ownerId: 'owner-1',
+        chainTicketId: 7n,
+        event: { organizationId: 'org-1', organization: { stellarAccount: 'GORG' } },
+      });
+
+      await expect(
+        service.confirmRevoke('organizer-1', 'ticket-1', 'signed-xdr'),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(stellar.submitSignedTransaction).not.toHaveBeenCalled();
+    });
+
+    it('rejects a cancel-resale envelope signed by another wallet with a 400', async () => {
+      mockSignedCall('cancel_resale', ['GSOMEONEELSE', 7n]);
+      prisma.ticket.findUnique.mockResolvedValue({
+        id: 'ticket-1',
+        ownerId: 'owner-1',
+        chainTicketId: 7n,
+        event: { organization: {} },
+      });
+      prisma.user.findUnique.mockResolvedValue(
+        createUser({ id: 'owner-1', stellarPublicKey: 'GOWNER' }),
+      );
+
+      await expect(
+        service.confirmCancelResale('owner-1', 'ticket-1', 'signed-xdr'),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(stellar.submitSignedTransaction).not.toHaveBeenCalled();
+    });
+
+    it('rejects a buy-resale envelope for a different ticket with a 400', async () => {
+      mockSignedCall('buy_resale', ['GBUYER', 9n]);
+      prisma.ticket.findUnique.mockResolvedValue({
+        id: 'ticket-1',
+        status: 'RESALE',
+        chainTicketId: 7n,
+        event: { organization: {} },
+      });
+      prisma.user.findUnique.mockResolvedValue(
+        createUser({ id: 'buyer-1', stellarPublicKey: 'GBUYER' }),
+      );
+
+      await expect(
+        service.confirmBuyResale('buyer-1', 'ticket-1', 'signed-xdr'),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(stellar.submitSignedTransaction).not.toHaveBeenCalled();
+    });
+  });
+
   describe('confirmCheckIn with reason', () => {
+    beforeEach(() => mockSignedCall('check_in', ['GORG', 7n]));
+
     it('stores check-in reason when provided', async () => {
       prisma.ticket.findUnique.mockResolvedValue({
         id: 'ticket-1',
         eventId: 'event-1',
         ownerId: 'owner-1',
-        event: { organizationId: 'org-1', organization: {} },
+        chainTicketId: 7n,
+        event: { organizationId: 'org-1', organization: { stellarAccount: 'GORG' } },
       });
       prisma.ticket.update.mockResolvedValue({
         id: 'ticket-1',
@@ -1795,7 +1879,8 @@ describe('TicketsService', () => {
         id: 'ticket-1',
         eventId: 'event-1',
         ownerId: 'owner-1',
-        event: { organizationId: 'org-1', organization: {} },
+        chainTicketId: 7n,
+        event: { organizationId: 'org-1', organization: { stellarAccount: 'GORG' } },
       });
       prisma.ticket.update.mockResolvedValue({
         id: 'ticket-1',

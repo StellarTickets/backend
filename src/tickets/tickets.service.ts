@@ -389,6 +389,10 @@ export class TicketsService {
     reason?: string,
   ) {
     const ticket = await this.loadTicketForOrganizer(userId, { id: ticketId });
+    this.assertSignedInvocation(signedXdr, 'check_in', [
+      ['organizer', 0, ticket.event.organization.stellarAccount],
+      ['ticket', 1, ticket.chainTicketId],
+    ]);
     if (gateId) {
       await this.gates!.assertBelongsToEvent(gateId, ticket.eventId);
     }
@@ -417,6 +421,10 @@ export class TicketsService {
     reason?: string,
   ) {
     const ticket = await this.getTicketWithOrg(ticketId);
+    this.assertSignedInvocation(signedXdr, 'check_in', [
+      ['organizer', 0, ticket.event.organization.stellarAccount],
+      ['ticket', 1, ticket.chainTicketId],
+    ]);
     if (gateId) {
       await this.gates!.assertBelongsToEvent(gateId, ticket.eventId);
     }
@@ -446,6 +454,10 @@ export class TicketsService {
 
   async confirmRevoke(userId: string, ticketId: string, signedXdr: string) {
     const ticket = await this.loadTicketForOrganizer(userId, { id: ticketId });
+    this.assertSignedInvocation(signedXdr, 'revoke_ticket', [
+      ['organizer', 0, ticket.event.organization.stellarAccount],
+      ['ticket', 1, ticket.chainTicketId],
+    ]);
     await this.stellar.submitSignedTransaction(signedXdr);
     const revoked = await this.prisma.ticket.update({
       where: { id: ticketId },
@@ -722,7 +734,12 @@ export class TicketsService {
     ticketId: string,
     signedXdr: string,
   ) {
-    await this.getOwnedTicket(ticketId, userId);
+    const ticket = await this.getOwnedTicket(ticketId, userId);
+    const owner = await this.getUserWithWallet(userId);
+    this.assertSignedInvocation(signedXdr, 'cancel_resale', [
+      ['owner', 0, owner.stellarPublicKey],
+      ['ticket', 1, ticket.chainTicketId],
+    ]);
     await this.stellar.submitSignedTransaction(signedXdr);
 
     return this.prisma.$transaction(async (tx) => {
@@ -752,6 +769,12 @@ export class TicketsService {
   }
 
   async confirmBuyResale(buyerId: string, ticketId: string, signedXdr: string) {
+    const ticket = await this.getTicketWithOrg(ticketId);
+    const buyer = await this.getUserWithWallet(buyerId);
+    this.assertSignedInvocation(signedXdr, 'buy_resale', [
+      ['buyer', 0, buyer.stellarPublicKey],
+      ['ticket', 1, ticket.chainTicketId],
+    ]);
     await this.stellar.submitSignedTransaction(signedXdr);
 
     return this.prisma.$transaction(async (tx) => {
@@ -1082,7 +1105,7 @@ export class TicketsService {
    * #375/#376/#377 — decodes the signed envelope and checks it calls `fn`
    * with the values this request is about to record. Each `expected` entry
    * is a label, the argument's position in the contract call, and the value
-   * it must hold. A mismatch is a 409: the client signed something other
+   * it must hold. A mismatch is a 400: the client signed something other
    * than what it asked us to record.
    */
   private assertSignedInvocation(
@@ -1099,13 +1122,13 @@ export class TicketsService {
       );
     }
     if (invocation.functionName !== fn) {
-      throw new ConflictException(
+      throw new BadRequestException(
         `Signed transaction calls ${invocation.functionName}, expected ${fn}`,
       );
     }
     for (const [label, index, value] of expected) {
       if (invocation.args[index] !== value) {
-        throw new ConflictException(
+        throw new BadRequestException(
           `Signed transaction ${label} does not match the request`,
         );
       }
