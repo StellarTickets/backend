@@ -42,6 +42,29 @@ describe('env.validate', () => {
     ).toThrow();
   });
 
+  it('accepts settlement asset metadata and a protected metrics token', () => {
+    expect(() =>
+      validate(
+        validConfig({
+          SETTLEMENT_ASSET_CODE: 'USDC',
+          SETTLEMENT_ASSET_DECIMALS: '6',
+          METRICS_TOKEN: 'm'.repeat(32),
+        }),
+      ),
+    ).not.toThrow();
+  });
+
+  it('rejects invalid settlement asset decimals, asset codes, and short metrics tokens', () => {
+    for (const overrides of [
+      { SETTLEMENT_ASSET_DECIMALS: '-1' },
+      { SETTLEMENT_ASSET_DECIMALS: '19' },
+      { SETTLEMENT_ASSET_CODE: 'usd coin' },
+      { METRICS_TOKEN: 'short' },
+    ]) {
+      expect(() => validate(validConfig(overrides))).toThrow();
+    }
+  });
+
   it('accepts a valid TRUST_PROXY and treats it as optional', () => {
     expect(() => validate(validConfig({ TRUST_PROXY: '1' }))).not.toThrow();
     expect(() =>

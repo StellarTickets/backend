@@ -62,6 +62,11 @@ const UNVALIDATED = {
       "Experimental: enable the chain indexer. Off unless exactly 'true'. " +
       "See docs/FEATURE_FLAGS.md.",
   },
+  ISSUE_BATCH_MAX_SIZE: {
+    type: "integer",
+    description:
+      "Maximum number of recipients in a single POST /tickets/issue-batch request.",
+  },
 };
 
 /** Collapse a `///` comment block into a single line. */
@@ -174,8 +179,6 @@ function parseEnvExample(src) {
     const m = line.match(/^#?\s*([A-Z_][A-Z0-9_]*)=(.*)$/);
     if (!m) continue;
     const [, name, value] = m;
-    // A commented line with no value is prose, not a default.
-    if (value.trim() === "" && line.startsWith("#")) continue;
     out.set(name, { value: value.trim(), commented: line.startsWith("#") });
   }
   return out;

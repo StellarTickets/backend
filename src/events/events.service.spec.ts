@@ -6,6 +6,7 @@ jest.mock('../stellar/stellar.service', () => ({ StellarService: jest.fn() }));
 
 import { EventsService } from './events.service';
 import type { PrismaService } from '../prisma/prisma.service';
+import type { ConfigService } from '@nestjs/config';
 import type { OrganizationsService } from '../organizations/organizations.service';
 import type { StellarService } from '../stellar/stellar.service';
 import { createEvent, createOrganization } from '../../test/factories';
@@ -24,7 +25,7 @@ describe('EventsService', () => {
       groupBy: jest.Mock;
     };
     ticket: { count: jest.Mock };
-    ticketType: { count: jest.Mock; createMany: jest.Mock };
+    ticketType: { count: jest.Mock; createMany: jest.Mock; create: jest.Mock };
   };
   let organizations: { assertMember: jest.Mock; findOne: jest.Mock };
   let stellar: {
@@ -57,6 +58,7 @@ describe('EventsService', () => {
       ticketType: {
         count: jest.fn().mockResolvedValue(1),
         createMany: jest.fn(),
+        create: jest.fn(),
       },
     };
     organizations = {
@@ -89,6 +91,15 @@ describe('EventsService', () => {
       prisma as unknown as PrismaService,
       organizations as unknown as OrganizationsService,
       stellar as unknown as StellarService,
+      {
+        get: jest.fn((key: string, fallback: unknown) =>
+          key === 'SETTLEMENT_ASSET_CODE'
+            ? 'XLM'
+            : key === 'SETTLEMENT_ASSET_DECIMALS'
+              ? 7
+              : fallback,
+        ),
+      } as unknown as ConfigService,
       undefined,
       cache,
     );
@@ -155,7 +166,7 @@ describe('EventsService', () => {
       prisma.event.create.mockResolvedValue({ id: 'event-1' });
       prisma.event.findUniqueOrThrow.mockResolvedValue({
         id: 'event-1',
-        ticketTypes: [{ id: 'tt-1', name: 'General' }],
+        ticketTypes: [{ id: 'tt-1', name: 'General', price: 1_000n }],
       });
 
       await service.create('organizer-1', 'org-1', {
@@ -546,12 +557,32 @@ describe('EventsService', () => {
     };
 
     it('returns one page of published events and the total count', async () => {
-      prisma.event.findMany.mockResolvedValue([{ id: 'event-21' }]);
+      prisma.event.findMany.mockResolvedValue([
+        {
+          id: 'event-21',
+          ticketTypes: [{ name: 'General', price: 1_234_500n }],
+        },
+      ]);
       prisma.event.count.mockResolvedValue(21);
 
       const result = await service.findPublished({ page: 2, limit: 20 });
 
-      expect(result).toEqual([[{ id: 'event-21' }], 21]);
+      expect(result).toEqual([
+        [
+          {
+            id: 'event-21',
+            ticketTypes: [
+              {
+                name: 'General',
+                price: 1_234_500n,
+                priceDisplay: '0.1234500 XLM',
+              },
+            ],
+            settlementAsset: { code: 'XLM', decimals: 7 },
+          },
+        ],
+        21,
+      ]);
       expect(prisma.event.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
           where: publishedWhere,
@@ -576,6 +607,42 @@ describe('EventsService', () => {
         { include: { ticketTypes: unknown } },
       ];
       expect(args.include.ticketTypes).toEqual({ where: { isHidden: false } });
+    });
+
+    it('formats prices using the configured settlement asset decimals', async () => {
+      const customAssetService = new EventsService(
+        prisma as unknown as PrismaService,
+        organizations as unknown as OrganizationsService,
+        stellar as unknown as StellarService,
+        {
+          get: jest.fn((key: string, fallback: unknown) =>
+            key === 'SETTLEMENT_ASSET_CODE'
+              ? 'USDC'
+              : key === 'SETTLEMENT_ASSET_DECIMALS'
+                ? 6
+                : fallback,
+          ),
+        } as unknown as ConfigService,
+        undefined,
+        cache,
+      );
+      prisma.event.findMany.mockResolvedValue([
+        {
+          id: 'event-usdc',
+          ticketTypes: [{ name: 'General', price: 1_234_500n }],
+        },
+      ]);
+      prisma.event.count.mockResolvedValue(1);
+
+      const [events] = await customAssetService.findPublished({
+        page: 1,
+        limit: 20,
+      });
+
+      expect(events[0]).toMatchObject({
+        settlementAsset: { code: 'USDC', decimals: 6 },
+        ticketTypes: [{ priceDisplay: '1.234500 USDC' }],
+      });
     });
   });
 
@@ -692,7 +759,13 @@ describe('EventsService', () => {
         }),
       );
       expect(page).toEqual({
-        items: [{ id: 'event-1', status: 'DRAFT' }],
+        items: [
+          {
+            id: 'event-1',
+            status: 'DRAFT',
+            settlementAsset: { code: 'XLM', decimals: 7 },
+          },
+        ],
         total: 1,
         page: 1,
         limit: 20,
@@ -827,6 +900,7 @@ describe('EventsService', () => {
   describe('cache invalidation', () => {
     it('invalidates cache on create', async () => {
       prisma.event.create.mockResolvedValue({ id: 'event-1' });
+      prisma.event.findUniqueOrThrow.mockResolvedValue({ ticketTypes: [] });
       await service.create('user-1', 'org-1', {
         name: 'Test',
         category: 'CONCERTS',

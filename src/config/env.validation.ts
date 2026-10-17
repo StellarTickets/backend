@@ -5,6 +5,8 @@ import {
   IsOptional,
   IsString,
   Matches,
+  Max,
+  Min,
   MinLength,
   ValidateIf,
   validateSync,
@@ -169,6 +171,25 @@ class EnvironmentVariables {
   /// Soroban RPC endpoint the StellarService submits contract calls through.
   @IsString()
   SOROBAN_RPC_URL!: string;
+
+  /// Code shown alongside ticket prices for the configured contract settlement token.
+  @IsString()
+  @Matches(/^[A-Z0-9]{1,12}$/)
+  @IsOptional()
+  SETTLEMENT_ASSET_CODE?: string;
+
+  /// Number of decimal places in the smallest unit used for ticket prices.
+  @IsInt()
+  @Min(0)
+  @Max(18)
+  @IsOptional()
+  SETTLEMENT_ASSET_DECIMALS?: number;
+
+  /// Bearer token protecting the Prometheus metrics endpoint; unset disables it.
+  @IsString()
+  @MinLength(32)
+  @IsOptional()
+  METRICS_TOKEN?: string;
 
   /// Which Stellar network every contract call targets. Must match the network
   /// the `ticketing` contract is deployed on and the one user wallets are set

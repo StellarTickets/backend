@@ -9,6 +9,7 @@ export const API_PREFIX_EXCLUDED_ROUTES = [
   { path: 'health/live', method: RequestMethod.ALL },
   { path: 'health/ready', method: RequestMethod.ALL },
   { path: 'health/(.*)', method: RequestMethod.ALL },
+  { path: 'metrics', method: RequestMethod.ALL },
 ];
 
 /**
