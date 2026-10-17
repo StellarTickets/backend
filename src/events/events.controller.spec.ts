@@ -14,12 +14,14 @@ import {
 import { EventsController } from './events.controller';
 import { EventsService } from './events.service';
 import { ResponseCacheInterceptor } from '../common/interceptors/response-cache.interceptor';
+import { OptionalJwtAuthGuard } from '../auth/guards/optional-jwt-auth.guard';
 
 describe('EventsController', () => {
   let app: INestApplication;
   const service = {
     findPublished: jest.fn(),
     getWithOrg: jest.fn(),
+    getWithReconciliation: jest.fn(),
     findForOrganization: jest.fn(),
     summarizeForOrganization: jest.fn(),
     create: jest.fn(),
@@ -35,7 +37,10 @@ describe('EventsController', () => {
     app = await createControllerApp({
       controller: EventsController,
       service: { provide: EventsService, useValue: service },
-      passthrough: { interceptors: [ResponseCacheInterceptor] },
+      passthrough: {
+        guards: [OptionalJwtAuthGuard],
+        interceptors: [ResponseCacheInterceptor],
+      },
     });
   });
   afterAll(() => app.close());
@@ -74,15 +79,46 @@ describe('EventsController', () => {
     });
 
     it('GET /events/:eventId returns one event and propagates not-found', async () => {
-      service.getWithOrg.mockResolvedValueOnce({ id: 'e1' });
+      service.getWithReconciliation.mockResolvedValueOnce({ id: 'e1' });
       await http().get('/events/e1').expect(200);
-      expect(service.getWithOrg).toHaveBeenCalledWith('e1');
+      expect(service.getWithReconciliation).toHaveBeenCalledWith(
+        'e1',
+        false,
+        undefined,
+      );
 
-      service.getWithOrg.mockRejectedValueOnce(
+      service.getWithReconciliation.mockRejectedValueOnce(
         new NotFoundException('Event not found'),
       );
       const res = await http().get('/events/nope').expect(404);
       expect((res.body as { message: string }).message).toBe('Event not found');
+    });
+
+    it('GET /events/:eventId forwards the reconcile flag', async () => {
+      service.getWithReconciliation.mockResolvedValueOnce({ id: 'e1' });
+
+      await http().get('/events/e1?reconcile=true').expect(200);
+
+      expect(service.getWithReconciliation).toHaveBeenCalledWith(
+        'e1',
+        true,
+        undefined,
+      );
+    });
+
+    it('forwards the caller id so members can see their drafts (#372)', async () => {
+      const controller = new EventsController(
+        service as unknown as EventsService,
+      );
+      service.getWithReconciliation.mockClear();
+
+      await controller.findOne('e1', { ...TEST_USER }, undefined);
+
+      expect(service.getWithReconciliation).toHaveBeenCalledWith(
+        'e1',
+        false,
+        TEST_USER.userId,
+      );
     });
   });
 

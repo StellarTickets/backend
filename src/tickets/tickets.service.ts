@@ -714,8 +714,32 @@ export class TicketsService {
         status: ResaleListingStatus.ACTIVE,
         ...(cursorFilter ?? {}),
       },
-      include: {
-        ticket: { include: { event: true, ticketType: true } },
+      // #374 — the marketplace is readable by any authenticated user, so the
+      // query must project only the fields it renders. Never include the whole
+      // Ticket: that would leak `qrSecret` (the gate code) and `ownerId`.
+      select: {
+        id: true,
+        ticketId: true,
+        price: true,
+        status: true,
+        expiresAt: true,
+        createdAt: true,
+        ticket: {
+          select: {
+            id: true,
+            seat: true,
+            event: {
+              select: {
+                id: true,
+                name: true,
+                venue: true,
+                startsAt: true,
+                royaltyBps: true,
+              },
+            },
+            ticketType: { select: { name: true, price: true } },
+          },
+        },
         seller: { select: { name: true } },
       },
       // createdAt + id keeps the order stable when timestamps collide.

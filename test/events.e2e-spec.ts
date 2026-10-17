@@ -11,6 +11,7 @@ import { AppModule } from './../src/app.module';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { StellarService } from '../src/stellar/stellar.service';
 import { JwtAuthGuard } from '../src/auth/guards/jwt-auth.guard';
+import { OptionalJwtAuthGuard } from '../src/auth/guards/optional-jwt-auth.guard';
 import type { CurrentUserPayload } from '../src/auth/decorators/current-user.decorator';
 import { createOrganization, createUser } from './factories';
 
@@ -21,7 +22,7 @@ import { createOrganization, createUser } from './factories';
 describe('Event lifecycle (e2e)', () => {
   let app: INestApplication<App>;
   let prisma: PrismaService;
-  let currentUser: CurrentUserPayload;
+  let currentUser: CurrentUserPayload | null;
 
   const mockStellarService = {
     buildCreateEventTx: jest.fn().mockResolvedValue('unsigned-xdr'),
@@ -42,6 +43,17 @@ describe('Event lifecycle (e2e)', () => {
         canActivate: (context: import('@nestjs/common').ExecutionContext) => {
           const req = context.switchToHttp().getRequest();
           req.user = currentUser;
+          return true;
+        },
+      })
+      // `GET /events/:id` is guarded by the optional variant: set `req.user`
+      // only when the test is acting as a signed-in user, so `currentUser =
+      // null` exercises the anonymous path (#372).
+      .overrideGuard(OptionalJwtAuthGuard)
+      .useValue({
+        canActivate: (context: import('@nestjs/common').ExecutionContext) => {
+          const req = context.switchToHttp().getRequest();
+          if (currentUser) req.user = currentUser;
           return true;
         },
       })
@@ -68,7 +80,8 @@ describe('Event lifecycle (e2e)', () => {
     await app.close();
   });
 
-  it('creates a draft event, adds a ticket type, then publishes it', async () => {
+  /** Seeds a fresh organizer + organization (organizer as OWNER) and signs them in. */
+  async function seedOrganizer() {
     const organizer = await prisma.user.create({
       data: createUser({
         id: randomUUID(),
@@ -94,20 +107,28 @@ describe('Event lifecycle (e2e)', () => {
       email: organizer.email,
       role: organizer.role,
     };
+    return { organizer, organization };
+  }
 
-    // Step 1: create the event as a DRAFT.
-    const createRes = await request(app.getHttpServer())
-      .post(`/v1/organizations/${organization.id}/events`)
+  /** Creates a DRAFT event through the API for the currently signed-in organizer. */
+  async function createDraftEvent(organizationId: string): Promise<string> {
+    const res = await request(app.getHttpServer())
+      .post(`/v1/organizations/${organizationId}/events`)
       .send({
-        name: 'Test Concert',
+        name: `Test Concert ${randomUUID()}`,
         category: 'CONCERTS',
         venue: 'Test Arena',
         startsAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
       })
       .expect(201);
+    return res.body.id as string;
+  }
 
-    expect(createRes.body.status).toBe('DRAFT');
-    const eventId = createRes.body.id as string;
+  it('creates a draft event, adds a ticket type, then publishes it', async () => {
+    const { organization } = await seedOrganizer();
+
+    // Step 1: create the event as a DRAFT.
+    const eventId = await createDraftEvent(organization.id);
 
     // Step 2: add a ticket type — required before the event can be published.
     const ticketTypeRes = await request(app.getHttpServer())
@@ -154,5 +175,93 @@ describe('Event lifecycle (e2e)', () => {
       .get(`/v1/events/${eventId}`)
       .expect(200);
     expect(getRes.body.status).toBe('PUBLISHED');
+  });
+
+  it('rejects adding a ticket type once the event is published (#371)', async () => {
+    const { organization } = await seedOrganizer();
+    const eventId = await createDraftEvent(organization.id);
+    // The publish transition itself is covered above; flip the status directly.
+    await prisma.event.update({
+      where: { id: eventId },
+      data: { status: 'PUBLISHED' },
+    });
+
+    await request(app.getHttpServer())
+      .post(`/v1/events/${eventId}/ticket-types`)
+      .send({ name: 'Late Release', price: '1000', quantityTotal: 10 })
+      .expect(400);
+
+    const count = await prisma.ticketType.count({ where: { eventId } });
+    expect(count).toBe(0);
+  });
+
+  describe('event visibility (#372)', () => {
+    it('hides a draft from anonymous callers but shows it to a member', async () => {
+      const { organization } = await seedOrganizer();
+      const eventId = await createDraftEvent(organization.id);
+
+      // Signed in as the owning organizer: the draft is visible.
+      await request(app.getHttpServer())
+        .get(`/v1/events/${eventId}`)
+        .expect(200);
+
+      // Anonymous: the draft reads as not-found.
+      currentUser = null;
+      await request(app.getHttpServer())
+        .get(`/v1/events/${eventId}`)
+        .expect(404);
+    });
+
+    it('shows a published event to anonymous callers', async () => {
+      const { organization } = await seedOrganizer();
+      const eventId = await createDraftEvent(organization.id);
+      await prisma.event.update({
+        where: { id: eventId },
+        data: { status: 'PUBLISHED' },
+      });
+
+      currentUser = null;
+      await request(app.getHttpServer())
+        .get(`/v1/events/${eventId}`)
+        .expect(200);
+    });
+  });
+
+  it('serializes BigInt columns as decimal strings (#373)', async () => {
+    const { organization } = await seedOrganizer();
+    const eventId = await createDraftEvent(organization.id);
+    await request(app.getHttpServer())
+      .post(`/v1/events/${eventId}/ticket-types`)
+      .send({ name: 'General Admission', price: '1000', quantityTotal: 100 })
+      .expect(201);
+    // chainEventId is @unique, so pick one unlikely to clash with another run.
+    const chainEventId = BigInt(Math.floor(Math.random() * 1_000_000_000) + 1);
+    await prisma.event.update({
+      where: { id: eventId },
+      data: { status: 'PUBLISHED', chainEventId },
+    });
+
+    // Event detail exposes the on-chain id (a BigInt) as a decimal string.
+    const detail = await request(app.getHttpServer())
+      .get(`/v1/events/${eventId}`)
+      .expect(200);
+    expect(detail.body.chainEventId).toBe(chainEventId.toString());
+    expect(typeof detail.body.chainEventId).toBe('string');
+
+    // The public listing returns ticket types; `price` is a BigInt column.
+    const list = await request(app.getHttpServer())
+      .get('/v1/events')
+      .query({ limit: 100 })
+      .expect(200);
+    const listed = (
+      list.body.items as Array<{
+        id: string;
+        ticketTypes: Array<{ price: unknown }>;
+      }>
+    ).find((event) => event.id === eventId);
+
+    expect(listed).toBeDefined();
+    expect(listed!.ticketTypes[0].price).toBe('1000');
+    expect(typeof listed!.ticketTypes[0].price).toBe('string');
   });
 });

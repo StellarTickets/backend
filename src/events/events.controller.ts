@@ -11,6 +11,7 @@ import {
   UseInterceptors,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { OptionalJwtAuthGuard } from '../auth/guards/optional-jwt-auth.guard';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import type { CurrentUserPayload } from '../auth/decorators/current-user.decorator';
 import { EventsService } from './events.service';
@@ -35,14 +36,17 @@ export class EventsController {
   }
 
   @Get('events/:eventId')
+  @UseGuards(OptionalJwtAuthGuard)
   @UseInterceptors(ResponseCacheInterceptor)
   findOne(
     @Param('eventId') eventId: string,
+    @CurrentUser() user: CurrentUserPayload | undefined,
     @Query('reconcile') reconcile?: string,
   ) {
     return this.eventsService.getWithReconciliation(
       eventId,
       reconcile === 'true',
+      user?.userId,
     );
   }
 

@@ -228,6 +228,50 @@ describe('Resale flow (e2e)', () => {
     expect(ticketAfterBuy.status).toBe('VALID');
   });
 
+  it('does not expose qrSecret or ownerId in the resale marketplace feed (#374)', async () => {
+    const { seller, ticket, event, ticketType } = await seedTicket();
+    currentUser = { userId: seller.id, email: seller.email, role: seller.role };
+
+    const listRes = await request(app.getHttpServer())
+      .post(`/v1/tickets/${ticket.id}/confirm-list-resale`)
+      .send({ price: '1100', signedXdr: 'signed-xdr' })
+      .expect(201);
+    const listingId = listRes.body.id as string;
+
+    const feed = await request(app.getHttpServer())
+      .get('/v1/tickets/resale')
+      .expect(200);
+
+    const item = (
+      feed.body.items as Array<
+        Record<string, unknown> & {
+          id: string;
+          ticket: Record<string, unknown> & {
+            event: Record<string, unknown>;
+            ticketType: Record<string, unknown>;
+          };
+          seller: Record<string, unknown>;
+        }
+      >
+    ).find((listing) => listing.id === listingId);
+
+    expect(item).toBeDefined();
+    // The gate code and the current owner must never leave the server.
+    expect(item).not.toHaveProperty('qrSecret');
+    expect(item!.ticket).not.toHaveProperty('qrSecret');
+    expect(item!.ticket).not.toHaveProperty('ownerId');
+
+    // The fields the marketplace renders (and nothing sensitive) are present.
+    expect(item!.ticket.event).toMatchObject({
+      id: event.id,
+      name: event.name,
+      venue: event.venue,
+    });
+    expect(item!.ticket.event).toHaveProperty('startsAt');
+    expect(item!.ticket.ticketType).toMatchObject({ name: ticketType.name });
+    expect(item!.seller).toHaveProperty('name');
+  });
+
   it('does not allow two ACTIVE resale listings for the same ticket (#216)', async () => {
     const { seller, ticket } = await seedTicket();
     currentUser = { userId: seller.id, email: seller.email, role: seller.role };

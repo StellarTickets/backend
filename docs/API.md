@@ -465,8 +465,10 @@ full row.)
 
 ### `GET /v1/events/:eventId`
 
-Public. One event row with its `organization` row embedded. `404` when
-missing.
+One event row with its `organization` row embedded. `PUBLISHED` events are
+public; a `DRAFT` (or any non-published) event is visible only to members of
+its owning organization — everyone else, signed in or not, gets `404` so an
+unannounced event's existence isn't leaked. `404` when missing.
 
 ```bash
 curl -s "$API/v1/events/7a1f3c5e-9b2d-4e6f-8a0c-1d2e3f4a5b6c"
@@ -536,7 +538,9 @@ Returns the event row.
 
 ### `POST /v1/events/:eventId/ticket-types`
 
-Members only.
+Members only. `400` unless the event is still a `DRAFT` — once published the
+sellable inventory is mirrored on-chain, so new ticket types would drift the
+two apart.
 
 | field | type | rules |
 |---|---|---|
