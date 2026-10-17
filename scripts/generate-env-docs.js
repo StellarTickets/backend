@@ -67,6 +67,16 @@ const UNVALIDATED = {
     description:
       "Maximum number of recipients in a single POST /tickets/issue-batch request.",
   },
+  QR_TOKEN_TTL_SECONDS: {
+    type: "integer",
+    description:
+      "How long a rotating QR token from GET /tickets/:ticketId/qr-token stays valid, in seconds.",
+  },
+  QR_TOKEN_CLOCK_SKEW_SECONDS: {
+    type: "integer",
+    description:
+      "Extra grace, in seconds, after a rotating QR token expires, for scanners whose clock runs behind.",
+  },
 };
 
 /** Collapse a `///` comment block into a single line. */

@@ -142,6 +142,8 @@ issued.
 | `FEATURE_FEE_BUMP` | boolean (string) | optional | `false` | **no** | Experimental: enable the fee-bump path. Off unless exactly 'true'. See docs/FEATURE_FLAGS.md.
 | `FEATURE_INDEXER` | boolean (string) | optional | `false` | **no** | Experimental: enable the chain indexer. Off unless exactly 'true'. See docs/FEATURE_FLAGS.md.
 | `ISSUE_BATCH_MAX_SIZE` | integer | optional | `50` | **no** | Maximum number of recipients in a single POST /tickets/issue-batch request.
+| `QR_TOKEN_TTL_SECONDS` | integer | optional | `30` | **no** | How long a rotating QR token from GET /tickets/:ticketId/qr-token stays valid, in seconds.
+| `QR_TOKEN_CLOCK_SKEW_SECONDS` | integer | optional | `5` | **no** | Extra grace, in seconds, after a rotating QR token expires, for scanners whose clock runs behind.
 | \* | | | | | The value used in code when the variable is unset. Commented out in `.env.example` because it only applies once the related optional feature is enabled. |
 
 <!-- END GENERATED: env table -->

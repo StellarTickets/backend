@@ -2,14 +2,17 @@ import {
   Body,
   Controller,
   Get,
+  Header,
   NotFoundException,
   Param,
   Patch,
   Post,
   Query,
+  Res,
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import type { CurrentUserPayload } from '../auth/decorators/current-user.decorator';
@@ -85,6 +88,40 @@ export class TicketsController {
       user.userId,
       parseChainTicketId(chainTicketId),
     );
+  }
+
+  /** #121 — One ticket, for its owner or staff of the event's organization. */
+  @Get(':ticketId')
+  findOne(
+    @CurrentUser() user: CurrentUserPayload,
+    @Param('ticketId') ticketId: string,
+  ) {
+    return this.ticketsService.findOne(user.userId, ticketId);
+  }
+
+  /**
+   * #125 — PNG of the ticket's QR code, owner only. Written to the response
+   * directly: the global BigInt serializer would flatten a returned Buffer.
+   */
+  @Get(':ticketId/qr')
+  async getQrImage(
+    @CurrentUser() user: CurrentUserPayload,
+    @Param('ticketId') ticketId: string,
+    @Res() res: Response,
+  ) {
+    const png = await this.ticketsService.getQrImage(user.userId, ticketId);
+    res.set({ 'Content-Type': 'image/png', 'Cache-Control': 'no-store' });
+    res.send(png);
+  }
+
+  /** #129 — Short-lived signed token to render in place of the static QR secret, owner only. */
+  @Get(':ticketId/qr-token')
+  @Header('Cache-Control', 'no-store')
+  getQrToken(
+    @CurrentUser() user: CurrentUserPayload,
+    @Param('ticketId') ticketId: string,
+  ) {
+    return this.ticketsService.issueQrToken(user.userId, ticketId);
   }
 
   @Get(':ticketId/offline-token')

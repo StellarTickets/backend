@@ -1,0 +1,13 @@
+meta {
+  name: Get Qr Image
+  type: http
+}
+
+get {
+  url: {{baseUrl}}/v1/tickets/{{ticketId}}/qr
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{accessToken}}
+}

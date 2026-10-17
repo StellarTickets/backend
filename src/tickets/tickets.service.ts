@@ -8,6 +8,7 @@ import {
   Optional,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { toBuffer } from 'qrcode';
 import {
   EventStatus,
   Prisma,
@@ -31,6 +32,7 @@ import {
 import { AuditService } from '../audit/audit.service';
 import { NotificationService } from '../notifications/notifications.service';
 import { OfflineTokenService } from './offline-token.service';
+import { QrTokenService } from './qr-token.service';
 import { PromoCodesService } from '../promo-codes/promo-codes.service';
 import { GatesService } from '../gates/gates.service';
 import { FeatureFlagsService } from '../config/feature-flags.service';
@@ -65,6 +67,7 @@ export class TicketsService {
     @Optional() private readonly gates?: GatesService,
     @Optional() private readonly audit?: AuditService,
     @Optional() private readonly featureFlags?: FeatureFlagsService,
+    @Optional() private readonly qrTokens?: QrTokenService,
   ) {}
 
   // ---- Organizer-authorized issuance (off-chain payment already settled) ----
@@ -443,7 +446,14 @@ export class TicketsService {
   // ---- Verification (read-only, organizer/gate staff) ----
 
   async verify(userId: string, qrSecret: string) {
-    const ticket = await this.loadTicketForOrganizer(userId, { qrSecret });
+    // #129 — a rotating token carries the ticket id instead of the static
+    // secret; it is checked (signature, then expiry) before any lookup.
+    const ticket = await this.loadTicketForOrganizer(
+      userId,
+      QrTokenService.isToken(qrSecret)
+        ? { id: this.qrTokens!.verify(qrSecret) }
+        : { qrSecret },
+    );
 
     // #321 — Graceful degradation: if the Soroban RPC is unavailable, serve
     // the cached DB data with a `stale: true` marker rather than throwing.
@@ -1020,6 +1030,47 @@ export class TicketsService {
       include: { event: true, ticketType: true },
       orderBy: { createdAt: 'desc' },
     });
+  }
+
+  /**
+   * #121 — Fetches one ticket for its owner or for staff of the owning
+   * event's organization; anyone else gets 403. The `qrSecret` is only
+   * returned to the owner, since staff scan it rather than hold it.
+   */
+  async findOne(userId: string, ticketId: string) {
+    const ticket = await this.prisma.ticket.findUnique({
+      where: { id: ticketId },
+      include: {
+        event: { include: { organization: true } },
+        ticketType: true,
+      },
+    });
+    if (!ticket) {
+      throw new NotFoundException('Ticket not found');
+    }
+    if (ticket.ownerId === userId) {
+      return ticket;
+    }
+
+    await this.organizations.assertMember(ticket.event.organizationId, userId);
+    return { ...ticket, qrSecret: undefined };
+  }
+
+  /** #125 — PNG of the ticket's QR code (its `qrSecret`). Owner only. */
+  async getQrImage(userId: string, ticketId: string): Promise<Buffer> {
+    const ticket = await this.getOwnedTicket(ticketId, userId);
+    return toBuffer(ticket.qrSecret, {
+      type: 'png',
+      errorCorrectionLevel: 'M',
+      margin: 2,
+      width: 512,
+    });
+  }
+
+  /** #129 — Issues a short-lived signed token to render in place of the static `qrSecret`. Owner only. */
+  async issueQrToken(userId: string, ticketId: string) {
+    const ticket = await this.getOwnedTicket(ticketId, userId);
+    return this.qrTokens!.issue(ticket.id);
   }
 
   /** Looks up a ticket by its on-chain id. Restricted to staff of the owning event's organization. */

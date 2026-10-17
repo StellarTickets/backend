@@ -5,6 +5,7 @@ import {
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   INestApplication,
   NotFoundException,
 } from '@nestjs/common';
@@ -37,6 +38,9 @@ describe('TicketsController', () => {
     verify: jest.fn(),
     getOfflinePublicKeys: jest.fn(),
     findByChainTicketId: jest.fn(),
+    findOne: jest.fn(),
+    getQrImage: jest.fn(),
+    issueQrToken: jest.fn(),
     getOfflineToken: jest.fn(),
     buildIssueTx: jest.fn(),
     confirmIssue: jest.fn(),
@@ -118,6 +122,9 @@ describe('TicketsController', () => {
     ['get', '/tickets/verify/secret'],
     ['get', '/tickets/offline-public-keys'],
     ['get', '/tickets/by-chain/1'],
+    ['get', `/tickets/${UUID}`],
+    ['get', `/tickets/${UUID}/qr`],
+    ['get', `/tickets/${UUID}/qr-token`],
     ['get', `/tickets/${UUID}/offline-token`],
     ['post', '/tickets/issue'],
     ['post', '/tickets/issue-batch'],
@@ -217,6 +224,73 @@ describe('TicketsController', () => {
         'Ticket not found',
       );
       expect(service.findByChainTicketId).not.toHaveBeenCalled();
+    });
+
+    it('GET /:ticketId returns the ticket for the caller (#121)', async () => {
+      service.findOne.mockResolvedValue({ id: 't1' });
+      const res = await http().get('/tickets/t1').set(AUTH).expect(200);
+      expect(res.body).toEqual({ id: 't1' });
+      expect(service.findOne).toHaveBeenCalledWith(uid, 't1');
+    });
+
+    it('GET /:ticketId propagates 403 and 404 (#121)', async () => {
+      service.findOne.mockRejectedValueOnce(new ForbiddenException());
+      await http().get('/tickets/t1').set(AUTH).expect(403);
+
+      service.findOne.mockRejectedValueOnce(new NotFoundException());
+      await http().get('/tickets/t2').set(AUTH).expect(404);
+    });
+
+    it('GET /:ticketId does not shadow the static ticket routes', async () => {
+      service.findMine.mockResolvedValue([]);
+      service.findActiveResaleListings.mockResolvedValue({ items: [] });
+      await http().get('/tickets/mine').set(AUTH).expect(200);
+      await http().get('/tickets/resale').set(AUTH).expect(200);
+      expect(service.findOne).not.toHaveBeenCalled();
+    });
+
+    it('GET /:ticketId/qr serves the PNG uncached (#125)', async () => {
+      const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+      service.getQrImage.mockResolvedValue(png);
+
+      const res = await http().get('/tickets/t1/qr').set(AUTH).expect(200);
+
+      expect(res.headers['content-type']).toBe('image/png');
+      expect(res.headers['cache-control']).toBe('no-store');
+      expect(Buffer.isBuffer(res.body)).toBe(true);
+      expect((res.body as Buffer).equals(png)).toBe(true);
+      expect(service.getQrImage).toHaveBeenCalledWith(uid, 't1');
+    });
+
+    it('GET /:ticketId/qr propagates 403 for a non-owner and 404 (#125)', async () => {
+      service.getQrImage.mockRejectedValueOnce(new ForbiddenException());
+      await http().get('/tickets/t1/qr').set(AUTH).expect(403);
+
+      service.getQrImage.mockRejectedValueOnce(new NotFoundException());
+      await http().get('/tickets/t2/qr').set(AUTH).expect(404);
+    });
+
+    it('GET /:ticketId/qr-token returns a fresh uncached token (#129)', async () => {
+      const issued = {
+        token: 'v1.t1.1790592030.sig',
+        expiresAt: '2026-10-17T12:00:30.000Z',
+        ttlSeconds: 30,
+      };
+      service.issueQrToken.mockResolvedValue(issued);
+
+      const res = await http()
+        .get('/tickets/t1/qr-token')
+        .set(AUTH)
+        .expect(200);
+
+      expect(res.body).toEqual(issued);
+      expect(res.headers['cache-control']).toBe('no-store');
+      expect(service.issueQrToken).toHaveBeenCalledWith(uid, 't1');
+    });
+
+    it('GET /:ticketId/qr-token propagates 403 for a non-owner (#129)', async () => {
+      service.issueQrToken.mockRejectedValueOnce(new ForbiddenException());
+      await http().get('/tickets/t1/qr-token').set(AUTH).expect(403);
     });
 
     it('GET /:ticketId/offline-token propagates not-found', async () => {

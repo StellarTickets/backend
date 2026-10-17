@@ -22,6 +22,7 @@ import type { PrismaService } from '../prisma/prisma.service';
 import type { OrganizationsService } from '../organizations/organizations.service';
 import type { StellarService } from '../stellar/stellar.service';
 import type { OfflineTokenService } from './offline-token.service';
+import type { QrTokenService } from './qr-token.service';
 import type { ConfigService } from '@nestjs/config';
 import {
   createEvent,
@@ -87,6 +88,7 @@ describe('TicketsService', () => {
   let organizations: { assertMember: jest.Mock };
   let stellar: Record<string, jest.Mock>;
   let offlineTokens: { sign: jest.Mock; getPublicKeys: jest.Mock };
+  let qrTokens: { issue: jest.Mock; verify: jest.Mock };
   let config: { get: jest.Mock };
 
   beforeEach(() => {
@@ -157,6 +159,7 @@ describe('TicketsService', () => {
       }),
       getPublicKeys: jest.fn().mockReturnValue({ 'test-key': 'pem' }),
     };
+    qrTokens = { issue: jest.fn(), verify: jest.fn() };
     config = { get: jest.fn().mockReturnValue(5) };
 
     service = new TicketsService(
@@ -166,6 +169,11 @@ describe('TicketsService', () => {
       undefined,
       offlineTokens as unknown as OfflineTokenService,
       config as unknown as ConfigService,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      qrTokens as unknown as QrTokenService,
     );
   });
 
@@ -884,6 +892,65 @@ describe('TicketsService', () => {
     });
   });
 
+  describe('verify — rotating QR tokens (#129)', () => {
+    const token = 'v1.ticket-1.1790592000.signature';
+
+    it('looks the ticket up by the id inside a valid token', async () => {
+      qrTokens.verify.mockReturnValue('ticket-1');
+      prisma.ticket.findUnique.mockResolvedValue({
+        id: 'ticket-1',
+        chainTicketId: 7n,
+        status: 'VALID',
+        seat: 'A1',
+        event: { organizationId: 'org-1', name: 'Radiohead Live' },
+        owner: { name: 'Ada Lovelace' },
+        ticketType: { name: 'GA' },
+      });
+      stellar.verifyTicket.mockResolvedValue({
+        owner: 'GBUYER',
+        status: 'Valid',
+      });
+
+      const result = await service.verify('staff-1', token);
+
+      expect(qrTokens.verify).toHaveBeenCalledWith(token);
+      expect(prisma.ticket.findUnique).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'ticket-1' } }),
+      );
+      expect(organizations.assertMember).toHaveBeenCalledWith(
+        'org-1',
+        'staff-1',
+      );
+      expect(result.ticketId).toBe('ticket-1');
+    });
+
+    it('rejects an expired token without touching the database', async () => {
+      qrTokens.verify.mockImplementation(() => {
+        throw new BadRequestException('QR code has expired');
+      });
+
+      await expect(service.verify('staff-1', token)).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+      expect(prisma.ticket.findUnique).not.toHaveBeenCalled();
+    });
+
+    it('still resolves a static qrSecret by the secret, never as a token', async () => {
+      prisma.ticket.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.verify('staff-1', 'c1d2e3f4-a5b6-4c7d-8e9f-0a1b2c3d4e5f'),
+      ).rejects.toBeInstanceOf(NotFoundException);
+
+      expect(qrTokens.verify).not.toHaveBeenCalled();
+      expect(prisma.ticket.findUnique).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { qrSecret: 'c1d2e3f4-a5b6-4c7d-8e9f-0a1b2c3d4e5f' },
+        }),
+      );
+    });
+  });
+
   describe('getOfflineToken', () => {
     it('signs a payload built from the ticket for an authorized staff member', async () => {
       prisma.ticket.findUnique.mockResolvedValue({
@@ -1389,6 +1456,129 @@ describe('TicketsService', () => {
       await expect(
         service.findByChainTicketId('outsider-1', 7n),
       ).rejects.toThrow(ForbiddenException);
+    });
+  });
+
+  describe('findOne (#121)', () => {
+    const ticket = {
+      id: 'ticket-1',
+      ownerId: 'owner-1',
+      qrSecret: 'qr-secret-1',
+      event: { id: 'event-1', organizationId: 'org-1', organization: {} },
+      ticketType: { id: 'tt-1' },
+    };
+
+    it('returns the ticket, including its qrSecret, to its owner', async () => {
+      prisma.ticket.findUnique.mockResolvedValue(ticket);
+
+      const result = await service.findOne('owner-1', 'ticket-1');
+
+      expect(prisma.ticket.findUnique).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'ticket-1' } }),
+      );
+      expect(organizations.assertMember).not.toHaveBeenCalled();
+      expect(result).toBe(ticket);
+    });
+
+    it('returns the ticket without its qrSecret to staff of the owning organization', async () => {
+      prisma.ticket.findUnique.mockResolvedValue(ticket);
+
+      const result = await service.findOne('staff-1', 'ticket-1');
+
+      expect(organizations.assertMember).toHaveBeenCalledWith(
+        'org-1',
+        'staff-1',
+      );
+      expect(result.id).toBe('ticket-1');
+      expect(result.qrSecret).toBeUndefined();
+    });
+
+    it('rejects a caller who is neither the owner nor organization staff (403)', async () => {
+      prisma.ticket.findUnique.mockResolvedValue(ticket);
+      organizations.assertMember.mockRejectedValueOnce(
+        new ForbiddenException('You are not a member of this organization'),
+      );
+
+      await expect(service.findOne('outsider-1', 'ticket-1')).rejects.toThrow(
+        ForbiddenException,
+      );
+    });
+
+    it('throws NotFoundException for an unknown ticket', async () => {
+      prisma.ticket.findUnique.mockResolvedValue(null);
+
+      await expect(service.findOne('owner-1', 'missing')).rejects.toThrow(
+        NotFoundException,
+      );
+      expect(organizations.assertMember).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('getQrImage (#125)', () => {
+    const PNG_SIGNATURE = Buffer.from([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+    ]);
+    const ticket = {
+      id: 'ticket-1',
+      ownerId: 'owner-1',
+      qrSecret: 'qr-secret-1',
+      event: { organizationId: 'org-1', organization: {} },
+    };
+
+    it('renders a PNG of the ticket secret for its owner', async () => {
+      prisma.ticket.findUnique.mockResolvedValue(ticket);
+
+      const png = await service.getQrImage('owner-1', 'ticket-1');
+
+      expect(png.subarray(0, 8).equals(PNG_SIGNATURE)).toBe(true);
+    });
+
+    it('rejects anyone but the owner, including organization staff (403)', async () => {
+      prisma.ticket.findUnique.mockResolvedValue(ticket);
+
+      await expect(service.getQrImage('staff-1', 'ticket-1')).rejects.toThrow(
+        ForbiddenException,
+      );
+      expect(organizations.assertMember).not.toHaveBeenCalled();
+    });
+
+    it('throws NotFoundException for an unknown ticket', async () => {
+      prisma.ticket.findUnique.mockResolvedValue(null);
+
+      await expect(service.getQrImage('owner-1', 'missing')).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+  });
+
+  describe('issueQrToken (#129)', () => {
+    const ticket = {
+      id: 'ticket-1',
+      ownerId: 'owner-1',
+      event: { organizationId: 'org-1', organization: {} },
+    };
+
+    it("issues a token for the owner's ticket", async () => {
+      prisma.ticket.findUnique.mockResolvedValue(ticket);
+      qrTokens.issue.mockReturnValue({
+        token: 'v1.ticket-1.1790592030.sig',
+        expiresAt: '2026-10-17T12:00:30.000Z',
+        ttlSeconds: 30,
+      });
+
+      const result = await service.issueQrToken('owner-1', 'ticket-1');
+
+      expect(qrTokens.issue).toHaveBeenCalledWith('ticket-1');
+      expect(result.ttlSeconds).toBe(30);
+    });
+
+    it('rejects anyone but the owner without issuing a token (403)', async () => {
+      prisma.ticket.findUnique.mockResolvedValue(ticket);
+
+      await expect(
+        service.issueQrToken('outsider-1', 'ticket-1'),
+      ).rejects.toThrow(ForbiddenException);
+      expect(qrTokens.issue).not.toHaveBeenCalled();
     });
   });
 

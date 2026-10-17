@@ -916,10 +916,56 @@ row comes with `event` (including `organization`) and `ticketType`.
 curl -s "$API/v1/tickets/by-chain/7" -H "Authorization: Bearer $TOKEN"
 ```
 
+### `GET /v1/tickets/:ticketId`
+
+One ticket with its `event` (including `organization`) and `ticketType`, for
+its owner or members of the event's organization. Anyone else gets `403`;
+an unknown id is `404`. Staff do not receive the ticket's `qrSecret`.
+
+```bash
+curl -s "$API/v1/tickets/6f0a2c4e-8b1d-4f3a-9e5c-7d8e9f0a1b2c" -H "Authorization: Bearer $TOKEN"
+```
+
+### `GET /v1/tickets/:ticketId/qr`
+
+Owner only (`403` for anyone else, `404` for an unknown id). A `512px` PNG
+(`Content-Type: image/png`, `Cache-Control: no-store`) encoding the ticket's
+`qrSecret`, ready for a client to display.
+
+```bash
+curl -s "$API/v1/tickets/6f0a2c4e-8b1d-4f3a-9e5c-7d8e9f0a1b2c/qr" -H "Authorization: Bearer $TOKEN" -o ticket.png
+```
+
+### `GET /v1/tickets/:ticketId/qr-token`
+
+Owner only. A short-lived signed token to render in place of the static
+`qrSecret`, so a screenshot of the QR code stops working once the token
+expires. Fetch a fresh one before `expiresAt` (`Cache-Control: no-store`).
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `QR_TOKEN_TTL_SECONDS` | `30` | How long a token lasts |
+| `QR_TOKEN_CLOCK_SKEW_SECONDS` | `5` | Extra grace after expiry, for scanners whose clock runs behind |
+
+```bash
+curl -s "$API/v1/tickets/6f0a2c4e-8b1d-4f3a-9e5c-7d8e9f0a1b2c/qr-token" -H "Authorization: Bearer $TOKEN"
+```
+
+```json
+{
+  "token": "v1.6f0a2c4e-8b1d-4f3a-9e5c-7d8e9f0a1b2c.1790592030.q2Zk...base64url...Ag",
+  "expiresAt": "2026-10-17T12:00:30.000Z",
+  "ttlSeconds": 30
+}
+```
+
 ### `GET /v1/tickets/verify/:qrSecret`
 
 Gate verification (members only, rate limited per `SCAN_RATE_LIMIT_*`,
-`429` when exceeded). Reads the ticket from the contract, reconciles the
+`429` when exceeded). `:qrSecret` is either the ticket's static `qrSecret`
+or a rotating token from `GET /v1/tickets/:ticketId/qr-token`; an expired
+token (past its expiry plus `QR_TOKEN_CLOCK_SKEW_SECONDS`) is rejected with
+`400`, and a forged one is `404`, like an unknown secret. Reads the ticket from the contract, reconciles the
 cached status, and falls back to the cached row with `stale: true` when
 Soroban RPC is unreachable. `ownerMismatch` is `true` when the recorded
 owner's wallet is not `onChainOwner`; the owner is then reconciled to the
