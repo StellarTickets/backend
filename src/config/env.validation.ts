@@ -224,6 +224,12 @@ class EnvironmentVariables {
   @IsInt()
   @IsOptional()
   IDEMPOTENCY_KEY_TTL_MINUTES?: number;
+
+  /// Ceiling, in stroops, on the platform-paid fee for one sponsored attendee
+  /// transaction when FEATURE_FEE_BUMP is on. Default 100000 (0.01 XLM).
+  @IsInt()
+  @IsOptional()
+  FEE_BUMP_MAX_FEE_STROOPS?: number;
 }
 
 function secretsProvider(env: EnvironmentVariables): string {

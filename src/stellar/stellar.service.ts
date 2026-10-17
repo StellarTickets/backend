@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import {
   Address,
   Contract,
+  FeeBumpTransaction,
   Keypair,
   nativeToScVal,
   scValToNative,
@@ -80,6 +81,19 @@ const MAX_SUBMIT_RETRIES = 3;
 /** #384 — Initial backoff delay in ms when retrying TRY_AGAIN_LATER. */
 const INITIAL_SUBMIT_BACKOFF_MS = 1_000;
 
+/**
+ * Default ceiling on the platform-paid fee for one sponsored attendee
+ * transaction, in stroops (100_000 = 0.01 XLM). Override with
+ * FEE_BUMP_MAX_FEE_STROOPS.
+ */
+const DEFAULT_FEE_BUMP_MAX_FEE_STROOPS = 100_000;
+
+/** Options for `submitSignedTransaction`. */
+export interface SubmitOptions {
+  /** Wrap the envelope in a platform-funded fee bump (#161). Off by default. */
+  sponsorFee?: boolean;
+}
+
 @Injectable()
 export class StellarService {
   private readonly logger = new Logger(StellarService.name);
@@ -90,6 +104,7 @@ export class StellarService {
   private readonly platformSigner: Keypair;
   private readonly buildTxTimeoutSeconds: number;
   private readonly pollTimeoutSeconds: number;
+  private readonly feeBumpMaxFeeStroops: number;
   private readonly rpcCircuitBreaker = new CircuitBreaker();
   private platformAccountCache: {
     account: Awaited<ReturnType<rpc.Server['getAccount']>>;
@@ -114,6 +129,9 @@ export class StellarService {
     this.pollTimeoutSeconds =
       this.config.get<number>('TRANSACTION_POLL_TIMEOUT_SECONDS') ??
       DEFAULT_POLL_TIMEOUT_SECONDS;
+    this.feeBumpMaxFeeStroops =
+      this.config.get<number>('FEE_BUMP_MAX_FEE_STROOPS') ??
+      DEFAULT_FEE_BUMP_MAX_FEE_STROOPS;
 
     this.logger.log(
       `StellarService initialized: networkPassphrase='${this.networkPassphrase}', contractId='${this.contractId}'`,
@@ -283,8 +301,11 @@ export class StellarService {
    */
   async submitSignedTransaction(
     signedXdr: string,
+    options: SubmitOptions = {},
   ): Promise<{ result: unknown; txHash: string }> {
-    const tx = TransactionBuilder.fromXDR(signedXdr, this.networkPassphrase);
+    const tx = options.sponsorFee
+      ? this.sponsorFee(signedXdr)
+      : TransactionBuilder.fromXDR(signedXdr, this.networkPassphrase);
     const txHash = tx.hash().toString('hex');
 
     let sendResult: rpc.Api.SendTransactionResponse | undefined;
@@ -351,6 +372,31 @@ export class StellarService {
     return TransactionBuilder.fromXDR(signedXdr, this.networkPassphrase)
       .hash()
       .toString('hex');
+  }
+
+  /**
+   * #161 — wraps the attendee's signed envelope in a fee bump the platform
+   * pays for. The declared fee is the spending cap: the network charges only
+   * what the inner transaction actually needs, never more than the cap.
+   */
+  private sponsorFee(signedXdr: string): FeeBumpTransaction {
+    const inner = TransactionBuilder.fromXDR(signedXdr, this.networkPassphrase);
+    if (!(inner instanceof Transaction)) {
+      throw new Error('Envelope is already a fee bump');
+    }
+    if (Number(inner.fee) > this.feeBumpMaxFeeStroops) {
+      throw new Error(
+        `Transaction fee ${inner.fee} exceeds the sponsorship cap of ${this.feeBumpMaxFeeStroops} stroops`,
+      );
+    }
+    const feeBump = TransactionBuilder.buildFeeBumpTransaction(
+      this.platformSigner,
+      this.feeBumpMaxFeeStroops.toString(),
+      inner,
+      this.networkPassphrase,
+    );
+    feeBump.sign(this.platformSigner);
+    return feeBump;
   }
 
   decodeSignedInvocation(signedXdr: string): SignedInvocation {

@@ -114,14 +114,17 @@ issued.
 | `TRUST_PROXY` | string | optional | — | yes | Express `trust proxy` setting: `true`, `false`, a hop count, or a comma-separated list of proxy IPs / CIDR ranges. Unset means `false`. See docs/DEPLOYMENT.md.
 | `SOROBAN_RPC_URL` | string | **required** | — | yes | Soroban RPC endpoint the StellarService submits contract calls through.
 | `STELLAR_NETWORK` | — | **required** | `testnet` | yes | Which Stellar network every contract call targets. Must match the network the `ticketing` contract is deployed on and the one user wallets are set
-| `TICKETING_CONTRACT_ID` | string | **required** | — | yes | Deployed `ticketing` contract's C... address.
-| `PLATFORM_SIGNER_SECRET` | string | **required** | — | yes | Platform hot wallet used only as a disposable source account for read-only contract simulations (verify_ticket, get_event). It signs nothing and is never used for a write. See docs/NON_CUSTODIAL.md.
+| `TICKETING_CONTRACT_ID` | — | **required** | — | yes | Deployed `ticketing` contract's C... address.
+| `PLATFORM_SIGNER_SECRET` | — | **required** | — | yes | Platform hot wallet used only as a disposable source account for read-only contract simulations (verify_ticket, get_event). It signs nothing and is never used for a write. See docs/NON_CUSTODIAL.md.
 | `OFFLINE_SIGNING_KEY_ID` | string | **required** | `2026-01` | yes | Key id of the Ed25519 key currently used to sign offline verification tokens. Must have a matching entry in OFFLINE_SIGNING_PUBLIC_KEYS.
 | `OFFLINE_SIGNING_PRIVATE_KEY` | string | **required** | — | yes | PEM-encoded Ed25519 private key used to sign offline verification tokens. See docs/OFFLINE_VERIFICATION.md for generation and rotation.
 | `OFFLINE_SIGNING_PUBLIC_KEYS` | string | **required** | — | yes | JSON map of key id -> PEM-encoded Ed25519 public key. Every key a scanner should still accept, current and retired, so tokens signed before a rotation keep verifying until they expire.
+| `TRANSACTION_BUILD_TIMEOUT_SECONDS` | integer | optional | `300` \* | yes | Soroban transaction time-bound set on every `build*Tx` envelope, in seconds. Default 300. See docs/NON_CUSTODIAL.md.
+| `TRANSACTION_POLL_TIMEOUT_SECONDS` | integer | optional | `15` \* | yes | How long `submitSignedTransaction` polls `getTransaction` for a result before giving up, in seconds. Default 15.
 | `PENDING_TX_RETENTION_MINUTES` | integer | optional | `60` | yes | How long a PendingTx row (build-transaction intent) stays valid before it's considered expired and eligible for cleanup.
 | `PENDING_TX_CLEANUP_INTERVAL_MINUTES` | integer | optional | `15` | yes | How often the PendingTx cleanup job runs, in minutes.
 | `IDEMPOTENCY_KEY_TTL_MINUTES` | integer | optional | `15` | yes | How long a cached response for an Idempotency-Key stays valid, in minutes, before a repeated key is treated as a new request.
+| `FEE_BUMP_MAX_FEE_STROOPS` | integer | optional | `100000` \* | yes | Ceiling, in stroops, on the platform-paid fee for one sponsored attendee transaction when FEATURE_FEE_BUMP is on. Default 100000 (0.01 XLM).
 | `SCAN_RATE_LIMIT_MAX` | integer | optional | `10` | **no** | Scans allowed per window per device, for ticket check-in abuse prevention. See docs/RATE_LIMITING.md.
 | `SCAN_RATE_LIMIT_WINDOW_MS` | integer | optional | `60000` | **no** | Length of the scan rate-limit window, in milliseconds.
 | `FEATURE_FEE_BUMP` | boolean (string) | optional | `false` | **no** | Experimental: enable the fee-bump path. Off unless exactly 'true'. See docs/FEATURE_FLAGS.md.

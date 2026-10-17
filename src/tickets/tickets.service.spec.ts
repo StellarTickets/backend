@@ -544,6 +544,7 @@ describe('TicketsService', () => {
 
       expect(stellar.submitSignedTransaction).toHaveBeenCalledWith(
         'signed-xdr',
+        { sponsorFee: false },
       );
       expect(ticket).toMatchObject({
         chainTicketId: 7n,
