@@ -36,7 +36,12 @@ export class ResponseCacheInterceptor implements NestInterceptor {
     if (req.method !== 'GET') {
       return next.handle();
     }
-    const key = `cache:${req.url}`;
+    // #372 — some GET routes return a body that depends on the caller (e.g.
+    // an event detail hides drafts from non-members), so an authenticated
+    // request must never share a cache entry with anonymous callers.
+    const userId = (req as Request & { user?: { userId?: string } }).user
+      ?.userId;
+    const key = userId ? `cache:user:${userId}:${req.url}` : `cache:${req.url}`;
     const cached = await this.cache.get<unknown>(key);
     if (cached !== undefined) {
       return of(cached);

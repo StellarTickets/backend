@@ -248,4 +248,25 @@ describe('OrganizationsService', () => {
       ).resolves.toBeUndefined();
     });
   });
+
+  describe('isMember (#372)', () => {
+    it('returns true when a membership row exists', async () => {
+      prisma.organizationMember.findUnique.mockResolvedValue({
+        id: 'membership-1',
+      });
+
+      await expect(service.isMember('org-1', 'user-1')).resolves.toBe(true);
+      expect(prisma.organizationMember.findUnique).toHaveBeenCalledWith({
+        where: {
+          organizationId_userId: { organizationId: 'org-1', userId: 'user-1' },
+        },
+      });
+    });
+
+    it('returns false instead of throwing when there is no membership', async () => {
+      prisma.organizationMember.findUnique.mockResolvedValue(null);
+
+      await expect(service.isMember('org-1', 'user-1')).resolves.toBe(false);
+    });
+  });
 });

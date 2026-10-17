@@ -1,10 +1,15 @@
-import { BadRequestException, ConflictException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  NotFoundException,
+} from '@nestjs/common';
 
 // See tickets.service.spec.ts for why StellarService is mocked at the
 // module level rather than imported for real.
 jest.mock('../stellar/stellar.service', () => ({ StellarService: jest.fn() }));
 
 import { EventsService } from './events.service';
+import type { CreateTicketTypeDto } from './dto/create-ticket-type.dto';
 import type { PrismaService } from '../prisma/prisma.service';
 import type { OrganizationsService } from '../organizations/organizations.service';
 import type { StellarService } from '../stellar/stellar.service';
@@ -24,9 +29,13 @@ describe('EventsService', () => {
       groupBy: jest.Mock;
     };
     ticket: { count: jest.Mock };
-    ticketType: { count: jest.Mock; createMany: jest.Mock };
+    ticketType: { count: jest.Mock; createMany: jest.Mock; create: jest.Mock };
   };
-  let organizations: { assertMember: jest.Mock; findOne: jest.Mock };
+  let organizations: {
+    assertMember: jest.Mock;
+    findOne: jest.Mock;
+    isMember: jest.Mock;
+  };
   let stellar: {
     buildCreateEventTx: jest.Mock;
     submitSignedTransaction: jest.Mock;
@@ -56,10 +65,12 @@ describe('EventsService', () => {
       ticketType: {
         count: jest.fn().mockResolvedValue(1),
         createMany: jest.fn(),
+        create: jest.fn(),
       },
     };
     organizations = {
       assertMember: jest.fn().mockResolvedValue(undefined),
+      isMember: jest.fn().mockResolvedValue(false),
       findOne: jest.fn().mockResolvedValue({
         id: 'org-1',
         defaultMaxResaleMultiplierBps: 11_000,
@@ -161,9 +172,7 @@ describe('EventsService', () => {
         category: 'CONCERTS',
         venue: 'O2 Arena',
         startsAt: new Date(),
-        ticketTypes: [
-          { name: 'General', price: '1000', quantityTotal: 100 },
-        ],
+        ticketTypes: [{ name: 'General', price: '1000', quantityTotal: 100 }],
       } as never);
 
       expect(prisma.$transaction).toHaveBeenCalled();
@@ -191,11 +200,88 @@ describe('EventsService', () => {
           category: 'CONCERTS',
           venue: 'O2 Arena',
           startsAt: new Date(),
-          ticketTypes: [
-            { name: 'General', price: '1000', quantityTotal: 100 },
-          ],
+          ticketTypes: [{ name: 'General', price: '1000', quantityTotal: 100 }],
         } as never),
       ).rejects.toThrow('duplicate ticket type name');
+    });
+  });
+
+  describe('addTicketType (#371)', () => {
+    const dto: CreateTicketTypeDto = {
+      name: 'General',
+      price: '1000',
+      quantityTotal: 100,
+    };
+
+    it('creates a ticket type while the event is still a draft', async () => {
+      prisma.event.findUnique.mockResolvedValue({
+        ...createEvent({
+          id: 'event-1',
+          organizationId: 'org-1',
+          status: 'DRAFT',
+        }),
+        organization: createOrganization({ stellarAccount: 'GORG' }),
+      });
+      prisma.ticketType.create.mockResolvedValue({ id: 'tt-1' });
+
+      await service.addTicketType('organizer-1', 'event-1', dto);
+
+      expect(prisma.ticketType.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          eventId: 'event-1',
+          name: 'General',
+          price: 1_000n,
+        }) as never,
+      });
+    });
+
+    it('rejects a published event and writes nothing', async () => {
+      prisma.event.findUnique.mockResolvedValue({
+        ...createEvent({
+          id: 'event-1',
+          organizationId: 'org-1',
+          status: 'PUBLISHED',
+        }),
+        organization: createOrganization({ stellarAccount: 'GORG' }),
+      });
+
+      await expect(
+        service.addTicketType('organizer-1', 'event-1', dto),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(prisma.ticketType.create).not.toHaveBeenCalled();
+    });
+
+    it('rejects a cancelled event and writes nothing', async () => {
+      prisma.event.findUnique.mockResolvedValue({
+        ...createEvent({
+          id: 'event-1',
+          organizationId: 'org-1',
+          status: 'CANCELLED',
+        }),
+        organization: createOrganization({ stellarAccount: 'GORG' }),
+      });
+
+      await expect(
+        service.addTicketType('organizer-1', 'event-1', dto),
+      ).rejects.toMatchObject({ status: 400 });
+      expect(prisma.ticketType.create).not.toHaveBeenCalled();
+    });
+
+    it('requires membership before checking the event status', async () => {
+      prisma.event.findUnique.mockResolvedValue({
+        ...createEvent({
+          id: 'event-1',
+          organizationId: 'org-1',
+          status: 'PUBLISHED',
+        }),
+        organization: createOrganization({ stellarAccount: 'GORG' }),
+      });
+      organizations.assertMember.mockRejectedValue(new Error('not a member'));
+
+      await expect(
+        service.addTicketType('outsider-1', 'event-1', dto),
+      ).rejects.toThrow('not a member');
+      expect(prisma.ticketType.create).not.toHaveBeenCalled();
     });
   });
 
@@ -428,15 +514,78 @@ describe('EventsService', () => {
     it('reports NOT_PUBLISHED without a chain lookup when no chain id was reserved', async () => {
       prisma.event.findUnique.mockResolvedValue({
         id: 'event-1',
+        organizationId: 'org-1',
         status: 'DRAFT',
         chainEventId: null,
         organization: { stellarAccount: 'GORG' },
       });
+      organizations.isMember.mockResolvedValue(true);
 
-      const event = await service.getWithReconciliation('event-1', true);
+      const event = await service.getWithReconciliation(
+        'event-1',
+        true,
+        'organizer-1',
+      );
 
       expect(stellar.getEvent).not.toHaveBeenCalled();
       expect(event.onChainStatus).toBe('NOT_PUBLISHED');
+    });
+
+    describe('draft visibility (#372)', () => {
+      const draft = {
+        id: 'event-1',
+        organizationId: 'org-1',
+        status: 'DRAFT',
+        chainEventId: null,
+        organization: { stellarAccount: 'GORG' },
+      };
+
+      it('hides a draft from anonymous callers with a 404', async () => {
+        prisma.event.findUnique.mockResolvedValue(draft);
+
+        await expect(
+          service.getWithReconciliation('event-1', false),
+        ).rejects.toBeInstanceOf(NotFoundException);
+        expect(organizations.isMember).not.toHaveBeenCalled();
+      });
+
+      it('hides a draft from authenticated non-members with a 404', async () => {
+        prisma.event.findUnique.mockResolvedValue(draft);
+        organizations.isMember.mockResolvedValue(false);
+
+        await expect(
+          service.getWithReconciliation('event-1', false, 'outsider-1'),
+        ).rejects.toMatchObject({ status: 404 });
+        expect(organizations.isMember).toHaveBeenCalledWith(
+          'org-1',
+          'outsider-1',
+        );
+      });
+
+      it('shows a draft to a member of the owning organization', async () => {
+        prisma.event.findUnique.mockResolvedValue(draft);
+        organizations.isMember.mockResolvedValue(true);
+
+        const event = await service.getWithReconciliation(
+          'event-1',
+          false,
+          'organizer-1',
+        );
+
+        expect(event).toBe(draft);
+      });
+
+      it('shows a published event to anonymous callers without a membership lookup', async () => {
+        prisma.event.findUnique.mockResolvedValue({
+          ...draft,
+          status: 'PUBLISHED',
+        });
+
+        const event = await service.getWithReconciliation('event-1', false);
+
+        expect(event.status).toBe('PUBLISHED');
+        expect(organizations.isMember).not.toHaveBeenCalled();
+      });
     });
   });
 

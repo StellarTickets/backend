@@ -11,6 +11,12 @@ Cache-Control: public, max-age=60, s-maxage=300
 Browsers may reuse the response for 60 seconds. Shared caches and CDNs may reuse it for up to 300 seconds.
 Authenticated organization event endpoints are not cached by this policy.
 
+The application-level `ResponseCacheInterceptor` backs `GET /events` and
+`GET /events/:eventId`. It keys anonymous requests by URL and authenticated
+requests by URL **and** caller id, so a response that depends on the viewer —
+e.g. a member seeing a `DRAFT` event's detail — is never served to a different
+caller.
+
 ## Application cache
 
 `CacheModule` (`src/common/cache/`) provides a small key/value cache with

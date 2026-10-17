@@ -136,12 +136,17 @@ export class OrganizationsService {
     return restored;
   }
 
-  /** Throws unless `userId` is a member of `organizationId`. Used by Events/Tickets services to authorize writes. */
-  async assertMember(organizationId: string, userId: string): Promise<void> {
+  /** True when `userId` belongs to `organizationId`. Never throws. */
+  async isMember(organizationId: string, userId: string): Promise<boolean> {
     const membership = await this.prisma.organizationMember.findUnique({
       where: { organizationId_userId: { organizationId, userId } },
     });
-    if (!membership) {
+    return membership !== null;
+  }
+
+  /** Throws unless `userId` is a member of `organizationId`. Used by Events/Tickets services to authorize writes. */
+  async assertMember(organizationId: string, userId: string): Promise<void> {
+    if (!(await this.isMember(organizationId, userId))) {
       throw new ForbiddenException('You are not a member of this organization');
     }
   }

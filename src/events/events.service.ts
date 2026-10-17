@@ -22,7 +22,8 @@ import { CACHE_STORE } from '../common/cache/cache-store';
 import { Inject } from '@nestjs/common';
 
 /** On-chain existence derived from `StellarService.getEvent`, reported alongside the cached DB `status` when reconciliation is requested. */
-export type OnChainReconciliationStatus = 'PUBLISHED' | 'NOT_FOUND' | 'NOT_PUBLISHED';
+export type OnChainReconciliationStatus =
+  'PUBLISHED' | 'NOT_FOUND' | 'NOT_PUBLISHED';
 
 @Injectable()
 export class EventsService {
@@ -86,6 +87,13 @@ export class EventsService {
   ) {
     const event = await this.getWithOrg(eventId);
     await this.organizations.assertMember(event.organizationId, userId);
+    // #371 — once published, the event's sellable inventory is mirrored
+    // on-chain; adding a ticket type here would drift the two apart.
+    if (event.status !== EventStatus.DRAFT) {
+      throw new BadRequestException(
+        'Ticket types can only be added to draft events',
+      );
+    }
     if (
       dto.saleStartsAt &&
       dto.saleEndsAt &&
@@ -215,13 +223,42 @@ export class EventsService {
     return event;
   }
 
-  /** Looks up the event, optionally reconciling its cached DB `status` against the chain. */
-  async getWithReconciliation(eventId: string, reconcile: boolean) {
+  /**
+   * Looks up the event for a possibly-anonymous `viewerId`, optionally
+   * reconciling its cached DB `status` against the chain.
+   *
+   * #372 — only PUBLISHED events are public. Drafts (and any other
+   * non-published status) read as not-found to anonymous callers and to
+   * authenticated callers who are not members of the owning organization, so
+   * an unannounced event's existence isn't leaked by its UUID.
+   */
+  async getWithReconciliation(
+    eventId: string,
+    reconcile: boolean,
+    viewerId?: string,
+  ) {
     const event = await this.getWithOrg(eventId);
+    if (
+      event.status !== EventStatus.PUBLISHED &&
+      !(await this.canView(event, viewerId))
+    ) {
+      throw new NotFoundException('Event not found');
+    }
     if (!reconcile) {
       return event;
     }
     return { ...event, onChainStatus: await this.getOnChainStatus(event) };
+  }
+
+  /** A viewer may see a non-published event only if they belong to its organization. */
+  private async canView(
+    event: { organizationId: string },
+    viewerId?: string,
+  ): Promise<boolean> {
+    if (!viewerId) {
+      return false;
+    }
+    return this.organizations.isMember(event.organizationId, viewerId);
   }
 
   private async getOnChainStatus(event: {

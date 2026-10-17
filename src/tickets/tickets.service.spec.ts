@@ -793,6 +793,80 @@ describe('TicketsService', () => {
         service.findActiveResaleListings('%%%', 10),
       ).rejects.toBeInstanceOf(BadRequestException);
     });
+
+    it('projects only marketplace fields, never qrSecret or ownerId (#374)', async () => {
+      prisma.resaleListing.findMany.mockResolvedValue([]);
+
+      await service.findActiveResaleListings(undefined, 10);
+
+      const [args] = prisma.resaleListing.findMany.mock.calls[0] as [
+        { select: Record<string, unknown>; include?: unknown },
+      ];
+      expect(args.include).toBeUndefined();
+      expect(args.select).toMatchObject({
+        id: true,
+        ticketId: true,
+        price: true,
+        seller: { select: { name: true } },
+      });
+
+      const ticketSelect = (
+        args.select.ticket as { select: Record<string, unknown> }
+      ).select;
+      expect(ticketSelect).not.toHaveProperty('qrSecret');
+      expect(ticketSelect).not.toHaveProperty('ownerId');
+      expect(ticketSelect).toHaveProperty('seat');
+
+      const eventSelect = (
+        ticketSelect.event as { select: Record<string, unknown> }
+      ).select;
+      expect(eventSelect).toMatchObject({
+        name: true,
+        venue: true,
+        startsAt: true,
+        royaltyBps: true,
+      });
+      expect(
+        (ticketSelect.ticketType as { select: Record<string, unknown> }).select,
+      ).toMatchObject({ name: true, price: true });
+    });
+
+    it('maps the projected rows into the marketplace feed with royalty math', async () => {
+      prisma.resaleListing.findMany.mockResolvedValue([
+        {
+          id: 'listing-1',
+          ticketId: 'ticket-1',
+          price: 1_200n,
+          status: 'ACTIVE',
+          expiresAt: null,
+          createdAt: new Date('2026-09-01T00:00:00.000Z'),
+          ticket: {
+            id: 'ticket-1',
+            seat: 'A1',
+            event: {
+              id: 'event-1',
+              name: 'Radiohead Live',
+              venue: 'O2 Arena',
+              startsAt: new Date('2026-12-01T20:00:00.000Z'),
+              royaltyBps: 500,
+            },
+            ticketType: { name: 'GA', price: 1_000n },
+          },
+          seller: { name: 'Alice' },
+        },
+      ]);
+
+      const page = await service.findActiveResaleListings(undefined, 10);
+      const [item] = page.items;
+
+      expect(item.ticket.event.name).toBe('Radiohead Live');
+      expect(item.ticket.ticketType.name).toBe('GA');
+      expect(item.seller.name).toBe('Alice');
+      expect(item.royaltyFee).toBe(60n);
+      expect(item.sellerProceeds).toBe(1_140n);
+      expect(item).not.toHaveProperty('qrSecret');
+      expect(item.ticket).not.toHaveProperty('ownerId');
+    });
   });
 
   describe('findMine', () => {
