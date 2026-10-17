@@ -31,11 +31,13 @@ import { RequestTimeoutInterceptor } from './common/interceptors/request-timeout
 import { RequestLoggingInterceptor } from './common/interceptors/request-logging.interceptor';
 
 import { HealthModule } from './health/health.module';
+import { MetricsModule } from './common/metrics/metrics.module';
 
 @Module({
   imports: [
     HealthModule,
     RefundsModule,
+    MetricsModule,
     ConfigModule.forRoot({ isGlobal: true, validate }),
     LoggerModule.forRootAsync({
       imports: [ConfigModule],

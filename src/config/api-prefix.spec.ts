@@ -1,10 +1,20 @@
-import { Controller, Get, INestApplication, Post } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  INestApplication,
+  Post,
+  RequestMethod,
+} from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { AppController } from '../app.controller';
 import { AppService } from '../app.service';
-import { applyApiPrefix, normalizeApiPrefix } from './api-prefix';
+import {
+  API_PREFIX_EXCLUDED_ROUTES,
+  applyApiPrefix,
+  normalizeApiPrefix,
+} from './api-prefix';
 
 @Controller('events')
 class EventsStubController {
@@ -68,6 +78,13 @@ describe('applyApiPrefix', () => {
       .expect(200)
       .expect({ status: 'ok', service: 'stellar-tickets-backend' });
     await request(server).get('/api/health').expect(404);
+  });
+
+  it('keeps the metrics route excluded from the API prefix', () => {
+    expect(API_PREFIX_EXCLUDED_ROUTES).toContainEqual({
+      path: 'metrics',
+      method: RequestMethod.ALL,
+    });
   });
 
   it('leaves routes unprefixed when API_PREFIX is unset', async () => {

@@ -6,6 +6,7 @@ import {
   NotFoundException,
   Optional,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { EventStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { OrganizationsService } from '../organizations/organizations.service';
@@ -20,22 +21,46 @@ import { CreateEventDto } from './dto/create-event.dto';
 import { CreateTicketTypeDto } from './dto/create-ticket-type.dto';
 import { CACHE_STORE } from '../common/cache/cache-store';
 import { Inject } from '@nestjs/common';
+import { formatPrice } from '../common/utils/currency';
+import { getSettlementAsset } from '../config/settlement-asset';
+import type { SettlementAsset } from '../config/settlement-asset';
 
 /** On-chain existence derived from `StellarService.getEvent`, reported alongside the cached DB `status` when reconciliation is requested. */
 export type OnChainReconciliationStatus =
   'PUBLISHED' | 'NOT_FOUND' | 'NOT_PUBLISHED';
 
+function hasPricedTicketTypes<T extends object>(
+  event: T,
+): event is T & { ticketTypes: Array<{ price: bigint }> } {
+  return (
+    'ticketTypes' in event &&
+    Array.isArray(event.ticketTypes) &&
+    event.ticketTypes.every(
+      (ticketType: unknown) =>
+        typeof ticketType === 'object' &&
+        ticketType !== null &&
+        'price' in ticketType &&
+        typeof ticketType.price === 'bigint',
+    )
+  );
+}
+
 @Injectable()
 export class EventsService {
+  private readonly settlementAsset: SettlementAsset;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly organizations: OrganizationsService,
     private readonly stellar: StellarService,
+    config: ConfigService,
     @Optional() private readonly audit?: AuditService,
     @Optional()
     @Inject(CACHE_STORE)
     private readonly cache?: { delete(k: string): Promise<void> },
-  ) {}
+  ) {
+    this.settlementAsset = getSettlementAsset(config);
+  }
 
   async create(userId: string, organizationId: string, dto: CreateEventDto) {
     await this.organizations.assertMember(organizationId, userId);
@@ -77,7 +102,7 @@ export class EventsService {
       organizationId,
     });
     await this.invalidateCache();
-    return event;
+    return this.withEventPricing(event);
   }
 
   async addTicketType(
@@ -94,7 +119,7 @@ export class EventsService {
     ) {
       throw new BadRequestException('Ticket sale end must be after its start');
     }
-    return this.prisma.ticketType.create({
+    const ticketType = await this.prisma.ticketType.create({
       data: {
         eventId,
         name: dto.name,
@@ -105,6 +130,7 @@ export class EventsService {
         isHidden: dto.isHidden ?? false,
       },
     });
+    return this.withTicketTypePricing(ticketType);
   }
 
   /** Step 1 of publishing: returns an unsigned XDR for the organizer's wallet to sign. */
@@ -226,9 +252,12 @@ export class EventsService {
   async getWithReconciliation(eventId: string, reconcile: boolean) {
     const event = await this.getWithOrg(eventId);
     if (!reconcile) {
-      return event;
+      return this.withEventPricing(event);
     }
-    return { ...event, onChainStatus: await this.getOnChainStatus(event) };
+    return this.withEventPricing({
+      ...event,
+      onChainStatus: await this.getOnChainStatus(event),
+    });
   }
 
   private async getOnChainStatus(event: {
@@ -246,14 +275,14 @@ export class EventsService {
   }
 
   /** One page of published events plus the total count, for `GET /events`. */
-  findPublished(query: PaginationQueryDto) {
+  async findPublished(query: PaginationQueryDto) {
     // #207 — exclude soft-deleted events and events of soft-deleted orgs.
     const where = {
       status: EventStatus.PUBLISHED,
       deletedAt: null,
       organization: { deletedAt: null },
     };
-    return this.prisma.$transaction([
+    const [events, total] = await this.prisma.$transaction([
       this.prisma.event.findMany({
         where,
         include: {
@@ -267,6 +296,10 @@ export class EventsService {
       }),
       this.prisma.event.count({ where }),
     ]);
+    return [
+      events.map((event) => this.withEventPricing(event)),
+      total,
+    ] as const;
   }
 
   /** #207 — soft-delete: sets `deletedAt` instead of hard-deleting. */
@@ -330,7 +363,39 @@ export class EventsService {
       this.prisma.event.count({ where }),
     ]);
 
-    return { items, total, page, limit };
+    return {
+      items: items.map((event) => this.withEventPricing(event)),
+      total,
+      page,
+      limit,
+    };
+  }
+
+  private withEventPricing<T extends object>(event: T) {
+    if ('ticketTypes' in event) {
+      if (!hasPricedTicketTypes(event)) {
+        throw new TypeError('Event ticket types must include bigint prices');
+      }
+      return {
+        ...event,
+        settlementAsset: this.settlementAsset,
+        ticketTypes: event.ticketTypes.map((ticketType) =>
+          this.withTicketTypePricing(ticketType),
+        ),
+      };
+    }
+
+    return {
+      ...event,
+      settlementAsset: this.settlementAsset,
+    };
+  }
+
+  private withTicketTypePricing<T extends { price: bigint }>(ticketType: T) {
+    return {
+      ...ticketType,
+      priceDisplay: `${formatPrice(ticketType.price, this.settlementAsset.decimals)} ${this.settlementAsset.code}`,
+    };
   }
 
   /** Event counts per status for one organization, for `GET .../events/summary`. */

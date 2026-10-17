@@ -11,18 +11,21 @@ export function formatPrice(
   priceSmallestUnit: bigint,
   decimals: number = 7,
 ): string {
-  if (decimals < 0) {
-    throw new Error('Decimals cannot be negative');
+  if (!Number.isInteger(decimals) || decimals < 0 || decimals > 18) {
+    throw new Error('Decimals must be an integer between 0 and 18');
   }
 
   const divisor = 10n ** BigInt(decimals);
-  const integerPart = priceSmallestUnit / divisor;
-  const fractionalPart = priceSmallestUnit % divisor;
+  const isNegative = priceSmallestUnit < 0n;
+  const absolutePrice = isNegative ? -priceSmallestUnit : priceSmallestUnit;
+  const integerPart = absolutePrice / divisor;
+  const fractionalPart = absolutePrice % divisor;
+  const sign = isNegative ? '-' : '';
 
   if (decimals === 0) {
-    return integerPart.toString();
+    return `${sign}${integerPart}`;
   }
 
   const fractionalStr = fractionalPart.toString().padStart(decimals, '0');
-  return `${integerPart}.${fractionalStr}`;
+  return `${sign}${integerPart}.${fractionalStr}`;
 }

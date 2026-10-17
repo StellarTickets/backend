@@ -31,3 +31,23 @@ LOG_LEVEL=info
 ## Prioritized Next Steps
 1. Error tracking (e.g. Sentry) on unhandled exceptions
 2. A dashboard for `StellarService` call latency/failure rate, since that's the module most exposed to external (Soroban RPC) failure
+
+## Prometheus Metrics
+
+When `METRICS_TOKEN` is configured, `GET /metrics` exposes Prometheus text
+format metrics. Supply it as a bearer token:
+
+```http
+Authorization: Bearer <METRICS_TOKEN>
+```
+
+The endpoint reports `http_requests_total` and the
+`http_request_duration_seconds` histogram. Labels include the HTTP method,
+status code, and the registered route template (for example
+`/events/:param`); request path values and query strings are never used as
+labels. Requests to `/metrics` are included in the metrics after that scrape
+completes. If `METRICS_TOKEN` is unset, the endpoint returns 404.
+
+Generate a random token of at least 32 characters and keep it in the same
+secret-management system as other credentials. See
+[`docs/CONFIGURATION.md`](CONFIGURATION.md).

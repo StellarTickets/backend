@@ -13,6 +13,11 @@ describe('formatPrice', () => {
     expect(formatPrice(BigInt('50'), 2)).toBe('0.50');
   });
 
+  it('formats a settlement asset amount using its configured decimals and code', () => {
+    expect(formatPrice(1_234_500n, 6)).toBe('1.234500');
+    expect(formatPrice(1_234_500n, 6) + ' USDC').toBe('1.234500 USDC');
+  });
+
   it('should handle zero decimals', () => {
     expect(formatPrice(BigInt('1000'), 0)).toBe('1000');
     expect(formatPrice(BigInt('100'), 0)).toBe('100');
@@ -32,8 +37,18 @@ describe('formatPrice', () => {
 
   it('should throw for negative decimals', () => {
     expect(() => formatPrice(BigInt('1000'), -1)).toThrow(
-      'Decimals cannot be negative',
+      'Decimals must be an integer between 0 and 18',
     );
+  });
+
+  it.each([1.5, 19])('rejects unsupported decimal counts: %s', (decimals) => {
+    expect(() => formatPrice(1000n, decimals)).toThrow(
+      'Decimals must be an integer between 0 and 18',
+    );
+  });
+
+  it('formats negative prices without a negative fractional part', () => {
+    expect(formatPrice(-150n, 2)).toBe('-1.50');
   });
 
   it('should pad fractional part with zeros', () => {
