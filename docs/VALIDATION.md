@@ -9,7 +9,10 @@ than being silently ignored.
 `IsStellarPublicKey` (in `src/common/decorators`) validates the
 ed25519 checksum via `@stellar/stellar-sdk`'s `StrKey`, not a regex —
 a string that merely looks like a Stellar address but fails the
-checksum is rejected before it ever reaches a service.
+checksum is rejected before it ever reaches a service. It accepts only
+G... ed25519 public keys; muxed M... account addresses are intentionally
+rejected because these DTO fields represent a wallet public key, not a
+destination account plus muxed identifier.
 
 `IsBigIntString` (in `src/common/decorators`) accepts non-negative integer
 strings (digits only, no leading zeros except `0`, at most 39 digits) so
@@ -34,4 +37,3 @@ Free-text fields have length limits to prevent database bloat:
 
 String fields are trimmed (leading/trailing whitespace removed) via
 `@Transform` decorators on DTOs, and validators reject whitespace-only values.
-

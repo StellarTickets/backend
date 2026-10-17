@@ -48,3 +48,16 @@ The flag is read from the environment when the app module is built, not from
 It covers jobs registered through `SchedulerModule`. The pending-transaction
 cleanup (`src/pending-tx/`) and event reminders (`src/events/`) run on their own
 `setInterval` timers and are not affected.
+
+## Ticket status reconciliation
+
+`TicketStatusReconciliationJob` periodically compares each cached database
+ticket status with the contract's `verify_ticket` result. Status drift is logged
+and repaired in the database; a conditional update avoids overwriting a status
+that changed concurrently. Each run logs totals for checked, drifted, repaired,
+raced, and failed tickets. RPC or persistence failures for an individual ticket
+are logged and do not prevent other tickets from being checked.
+
+Set `TICKET_RECONCILIATION_INTERVAL_MINUTES` to an integer from 1 to 1440;
+the default is 60 minutes. Like the cron jobs, this job is not registered when
+`SCHEDULER_ENABLED=false`.

@@ -178,6 +178,22 @@ describe('env.validate', () => {
     ).toThrow();
   });
 
+  it('accepts a configured ticket reconciliation interval', () => {
+    expect(() =>
+      validate(validConfig({ TICKET_RECONCILIATION_INTERVAL_MINUTES: '5' })),
+    ).not.toThrow();
+  });
+
+  it('rejects ticket reconciliation intervals outside 1 to 1440 minutes', () => {
+    for (const interval of ['0', '1441', 'many']) {
+      expect(() =>
+        validate(
+          validConfig({ TICKET_RECONCILIATION_INTERVAL_MINUTES: interval }),
+        ),
+      ).toThrow();
+    }
+  });
+
   it.each(['true', 'false'])('accepts SCHEDULER_ENABLED=%s', (value) => {
     expect(() =>
       validate(validConfig({ SCHEDULER_ENABLED: value })),

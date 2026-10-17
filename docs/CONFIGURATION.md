@@ -135,6 +135,7 @@ issued.
 | `TRANSACTION_POLL_TIMEOUT_SECONDS` | integer | optional | `15` \* | yes | How long `submitSignedTransaction` polls `getTransaction` for a result before giving up, in seconds. Default 15.
 | `PENDING_TX_RETENTION_MINUTES` | integer | optional | `60` | yes | How long a PendingTx row (build-transaction intent) stays valid before it's considered expired and eligible for cleanup.
 | `PENDING_TX_CLEANUP_INTERVAL_MINUTES` | integer | optional | `15` | yes | How often the PendingTx cleanup job runs, in minutes.
+| `TICKET_RECONCILIATION_INTERVAL_MINUTES` | integer | optional | `60` \* | yes | How often to compare cached ticket statuses with `verify_ticket`, in minutes. Defaults to 60.
 | `IDEMPOTENCY_KEY_TTL_MINUTES` | integer | optional | `15` | yes | How long a cached response for an Idempotency-Key stays valid, in minutes, before a repeated key is treated as a new request.
 | `FEE_BUMP_MAX_FEE_STROOPS` | integer | optional | `100000` \* | yes | Ceiling, in stroops, on the platform-paid fee for one sponsored attendee transaction when FEATURE_FEE_BUMP is on. Default 100000 (0.01 XLM).
 | `SCAN_RATE_LIMIT_MAX` | integer | optional | `10` | **no** | Scans allowed per window per device, for ticket check-in abuse prevention. See docs/RATE_LIMITING.md.

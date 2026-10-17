@@ -4,6 +4,8 @@ import { ScheduleModule } from '@nestjs/schedule';
 import { HeartbeatJob } from './heartbeat.job';
 import { ChainEventIndexerJob } from '../indexer/chain-event-indexer.job';
 import { IndexerModule } from '../indexer/indexer.module';
+import { StellarModule } from '../stellar/stellar.module';
+import { TicketStatusReconciliationJob } from './ticket-status-reconciliation.job';
 
 /** Cron jobs run unless `SCHEDULER_ENABLED=false`. */
 export function isSchedulerEnabled(
@@ -29,8 +31,12 @@ export class SchedulerModule {
     }
     return {
       module: SchedulerModule,
-      imports: [ScheduleModule.forRoot(), IndexerModule],
-      providers: [HeartbeatJob, ChainEventIndexerJob],
+      imports: [ScheduleModule.forRoot(), IndexerModule, StellarModule],
+      providers: [
+        HeartbeatJob,
+        ChainEventIndexerJob,
+        TicketStatusReconciliationJob,
+      ],
     };
   }
 }

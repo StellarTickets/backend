@@ -251,6 +251,13 @@ class EnvironmentVariables {
   @IsOptional()
   PENDING_TX_CLEANUP_INTERVAL_MINUTES?: number;
 
+  /// How often to compare cached ticket statuses with `verify_ticket`, in minutes. Defaults to 60.
+  @IsInt()
+  @Min(1)
+  @Max(1440)
+  @IsOptional()
+  TICKET_RECONCILIATION_INTERVAL_MINUTES?: number;
+
   /// How long a cached response for an Idempotency-Key stays valid, in
   /// minutes, before a repeated key is treated as a new request.
   @IsInt()
