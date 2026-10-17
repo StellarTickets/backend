@@ -423,3 +423,20 @@ model ProcessedTx {
   response  Json
   createdAt DateTime @default(now())
 }
+
+/// Position of the chain event indexer in the ticketing contract's event
+/// stream (#163). `cursor` is the RPC `pagingToken` of the last applied event.
+model IndexerCursor {
+  name      String   @id
+  cursor    String
+  updatedAt DateTime @updatedAt
+}
+
+/// Contract events the indexer already applied, keyed by the RPC event id
+/// (#163). A re-delivered event hits this primary key and is skipped.
+model ProcessedChainEvent {
+  id          String   @id
+  ledger      Int
+  name        String
+  processedAt DateTime @default(now())
+}

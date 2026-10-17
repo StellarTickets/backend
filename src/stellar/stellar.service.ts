@@ -40,6 +40,18 @@ export interface OnChainEvent {
   ticketsIssued: bigint;
 }
 
+/** A ticketing-contract event the chain indexer applies (#163). */
+export interface ChainTicketEvent {
+  /** RPC event id; unique per emitted event, so it dedupes re-delivery. */
+  id: string;
+  pagingToken: string;
+  ledger: number;
+  /** Event topic, e.g. `TicketIssued` or `TicketCheckedIn`. */
+  name: string;
+  /** Ticket the event refers to, or null when the payload carries none. */
+  chainTicketId: bigint | null;
+}
+
 /** The single ticketing-contract call carried by a signed envelope. */
 export interface SignedInvocation {
   functionName: string;
@@ -399,6 +411,33 @@ export class StellarService {
     return feeBump;
   }
 
+  /**
+   * One page of ticketing-contract events after `cursor`. Without a cursor,
+   * reads from the latest ledger so a first run does not replay history the
+   * RPC node may have pruned (#163).
+   */
+  async getTicketEvents(
+    cursor: string | undefined,
+    limit: number,
+  ): Promise<ChainTicketEvent[]> {
+    const start = cursor
+      ? { cursor }
+      : {
+          startLedger: (await this.rpcCall(() => this.server.getLatestLedger()))
+            .sequence,
+        };
+    const response = await this.rpcCall(() =>
+      this.server.getEvents({
+        ...start,
+        filters: [
+          { type: 'contract', contractIds: [this.contract.contractId()] },
+        ],
+        limit,
+      }),
+    );
+    return response.events.map((event) => this.decodeTicketEvent(event));
+  }
+
   decodeSignedInvocation(signedXdr: string): SignedInvocation {
     const tx = TransactionBuilder.fromXDR(signedXdr, this.networkPassphrase);
     const inner = tx instanceof Transaction ? tx : tx.innerTransaction;
@@ -529,6 +568,24 @@ export class StellarService {
       await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
     }
     throw new Error(`Timed out waiting for transaction ${hash} to land`);
+  }
+
+  private decodeTicketEvent(event: rpc.Api.EventResponse): ChainTicketEvent {
+    const name = String(scValToNative(event.topic[0]));
+    // Payload shape is assumed: a bare u64 ticket id, or a map with a
+    // `ticket_id` field. Confirm against the contract's emitted events.
+    const payload = scValToNative(event.value) as unknown;
+    const raw =
+      typeof payload === 'bigint'
+        ? payload
+        : (payload as { ticket_id?: unknown } | null)?.ticket_id;
+    return {
+      id: event.id,
+      pagingToken: event.pagingToken,
+      ledger: event.ledger,
+      name,
+      chainTicketId: typeof raw === 'bigint' ? raw : null,
+    };
   }
 
   private rpcCall<T>(operation: () => Promise<T>): Promise<T> {
