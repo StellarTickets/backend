@@ -338,6 +338,64 @@ Clears `deletedAt` (members only). Returns the row.
 curl -s -X POST "$API/v1/organizations/2c7e4a10-5b6d-4f8e-9a1b-3c4d5e6f7a8b/restore" -H "Authorization: Bearer $TOKEN"
 ```
 
+### `POST /v1/organizations/:id/invitations`
+
+Invites an email address to join the organization (`OWNER`/`ADMIN` only).
+The person doesn't need an account yet. The raw `token` is returned **once**;
+only its hash is stored, so deliver it to the invitee yourself (e.g. in an
+accept link). Invites expire 7 days after creation.
+
+| field | type | rules |
+|---|---|---|
+| `email` | string | required, trimmed and lower-cased |
+| `role` | string | optional, `ADMIN` or `STAFF` (default `STAFF`) |
+
+```bash
+curl -s -X POST "$API/v1/organizations/2c7e4a10-5b6d-4f8e-9a1b-3c4d5e6f7a8b/invitations" \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"email":"grace@example.com","role":"ADMIN"}'
+```
+
+```json
+{
+  "invitation": {
+    "id": "7a1c3e5f-2b4d-4c6e-8f0a-1b2c3d4e5f6a",
+    "organizationId": "2c7e4a10-5b6d-4f8e-9a1b-3c4d5e6f7a8b",
+    "email": "grace@example.com",
+    "role": "ADMIN",
+    "invitedById": "5e2b9f0c-1a3d-4b7e-8f9a-0c1d2e3f4a5b",
+    "expiresAt": "2026-10-25T12:00:00.000Z",
+    "acceptedAt": null,
+    "acceptedById": null,
+    "createdAt": "2026-10-18T12:00:00.000Z"
+  },
+  "token": "inv_3f9c…"
+}
+```
+
+`403` when the caller isn't an `OWNER`/`ADMIN`, `404` when the organization is
+missing or soft-deleted, `409` when that email already belongs to a member.
+
+### `POST /v1/organizations/invitations/accept`
+
+Accepts an invite as the signed-in user, whose account email must match the
+invite's. Creates the `OrganizationMember` with the invited role and promotes
+an `ATTENDEE` to `ORGANIZER`. Returns the membership row.
+
+| field | type | rules |
+|---|---|---|
+| `token` | string | required, the token from the invite |
+
+```bash
+curl -s -X POST "$API/v1/organizations/invitations/accept" \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"token":"inv_3f9c…"}'
+```
+
+`410` when the invite has expired, `404` for an unknown token or a
+soft-deleted organization, `403` when the email doesn't match, `409` when the
+invite was already accepted or the caller is already a member.
+
 ## Webhooks
 
 All three routes require membership in `:organizationId`. See

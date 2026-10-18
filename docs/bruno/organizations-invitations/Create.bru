@@ -1,0 +1,21 @@
+meta {
+  name: Create
+  type: http
+}
+
+post {
+  url: {{baseUrl}}/v1/organizations/{{id}}/invitations
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{accessToken}}
+}
+
+body:json {
+  {
+    "email": "you@example.com",
+    "role": "string"
+  }
+}

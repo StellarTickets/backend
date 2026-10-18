@@ -1,0 +1,20 @@
+meta {
+  name: Accept
+  type: http
+}
+
+post {
+  url: {{baseUrl}}/v1/organizations/invitations/accept
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{accessToken}}
+}
+
+body:json {
+  {
+    "token": "x"
+  }
+}

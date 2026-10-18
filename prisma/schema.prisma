@@ -107,6 +107,8 @@ model User {
   promoRedemptions PromoCodeRedemption[]
   auditLogs        AuditLog[]
   pendingTxs       PendingTx[]
+  sentInvitations     OrganizationInvitation[] @relation("InvitationInviter")
+  acceptedInvitations OrganizationInvitation[] @relation("InvitationAcceptor")
   createdAt        DateTime             @default(now())
   updatedAt        DateTime             @updatedAt
 }
@@ -127,6 +129,7 @@ model Organization {
   /// Default `Event.royaltyBps` applied when a new event's DTO omits it.
   defaultRoyaltyBps             Int @default(500)
   members        OrganizationMember[]
+  invitations    OrganizationInvitation[]
   events         Event[]
   webhookEndpoints WebhookEndpoint[]
   /// #207 — soft-delete marker. Null = live; non-null = deleted at that time.
@@ -147,6 +150,29 @@ model OrganizationMember {
 
   @@unique([organizationId, userId])
   @@index([userId])
+}
+
+/// An invite for an email address to join an `Organization`, so members can be
+/// added before they have an account. Only a SHA-256 hash of the opaque token
+/// is stored; the raw token is returned once at creation. Accepting creates
+/// the `OrganizationMember`; invites expire 7 days after creation.
+model OrganizationInvitation {
+  id             String        @id @default(uuid())
+  organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organizationId String
+  /// Stored trimmed and lower-cased, matching `User.email`.
+  email          String
+  role           OrgMemberRole @default(STAFF)
+  tokenHash      String        @unique
+  invitedBy      User?         @relation("InvitationInviter", fields: [invitedById], references: [id], onDelete: SetNull)
+  invitedById    String?
+  expiresAt      DateTime
+  acceptedAt     DateTime?
+  acceptedBy     User?         @relation("InvitationAcceptor", fields: [acceptedById], references: [id], onDelete: SetNull)
+  acceptedById   String?
+  createdAt      DateTime      @default(now())
+
+  @@index([organizationId, email])
 }
 
 model Event {
