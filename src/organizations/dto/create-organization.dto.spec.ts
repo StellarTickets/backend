@@ -25,6 +25,11 @@ describe('CreateOrganizationDto', () => {
     expect(errors.some((e) => e.property === 'slug')).toBe(true);
   });
 
+  it('accepts a payload without a slug', async () => {
+    const errors = await validate(build({ slug: undefined }));
+    expect(errors).toHaveLength(0);
+  });
+
   it('rejects an industry outside the enum', async () => {
     const errors = await validate(build({ industry: 'CIRCUS' }));
     expect(errors.some((e) => e.property === 'industry')).toBe(true);
@@ -57,7 +62,10 @@ describe('CreateOrganizationDto', () => {
 
   it('accepts optional resale defaults within range', async () => {
     const errors = await validate(
-      build({ defaultMaxResaleMultiplierBps: 15_000, defaultRoyaltyBps: 1_000 }),
+      build({
+        defaultMaxResaleMultiplierBps: 15_000,
+        defaultRoyaltyBps: 1_000,
+      }),
     );
     expect(errors).toHaveLength(0);
   });

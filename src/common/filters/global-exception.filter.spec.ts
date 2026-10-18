@@ -251,4 +251,62 @@ describe('GlobalExceptionFilter', () => {
       });
     });
   });
+
+  describe('X-Request-Id correlation', () => {
+    it('includes requestId in HttpException error body when present on request header', () => {
+      const response = {
+        status: jest.fn().mockReturnThis(),
+        json: jest.fn(),
+      };
+      const request = {
+        method: 'GET',
+        url: '/test',
+        headers: { 'x-request-id': 'req-123-abc' },
+      };
+      const argumentsHost = {
+        switchToHttp: () => ({
+          getResponse: () => response,
+          getRequest: () => request,
+        }),
+      } as unknown as ArgumentsHost;
+
+      filter.catch(new NotFoundException('Resource missing'), argumentsHost);
+
+      expect(response.status).toHaveBeenCalledWith(HttpStatus.NOT_FOUND);
+      expect(response.json).toHaveBeenCalledWith({
+        statusCode: HttpStatus.NOT_FOUND,
+        message: 'Resource missing',
+        error: 'Not Found',
+        requestId: 'req-123-abc',
+      });
+    });
+
+    it('includes requestId in unhandled/Prisma error body', () => {
+      const response = {
+        status: jest.fn().mockReturnThis(),
+        json: jest.fn(),
+      };
+      const request = {
+        method: 'POST',
+        url: '/test',
+        headers: { 'x-request-id': 'req-456-def' },
+      };
+      const argumentsHost = {
+        switchToHttp: () => ({
+          getResponse: () => response,
+          getRequest: () => request,
+        }),
+      } as unknown as ArgumentsHost;
+
+      filter.catch(createPrismaError('P2002'), argumentsHost);
+
+      expect(response.status).toHaveBeenCalledWith(HttpStatus.CONFLICT);
+      expect(response.json).toHaveBeenCalledWith({
+        statusCode: HttpStatus.CONFLICT,
+        code: 'PRISMA_P2002',
+        message: 'A record with this value already exists',
+        requestId: 'req-456-def',
+      });
+    });
+  });
 });

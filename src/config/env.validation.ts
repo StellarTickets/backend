@@ -5,6 +5,8 @@ import {
   IsOptional,
   IsString,
   Matches,
+  Max,
+  Min,
   MinLength,
   ValidateIf,
   validateSync,
@@ -22,6 +24,11 @@ class EnvironmentVariables {
   /// whether development-only behaviour is enabled.
   @IsIn(['development', 'test', 'production'])
   NODE_ENV!: string;
+
+  /// Log level for pino logger: fatal, error, warn, info, debug, trace, silent.
+  @IsIn(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'])
+  @IsOptional()
+  LOG_LEVEL?: string;
 
   /// Opt in to HTTP/NestJS OpenTelemetry spans. Off unless literally 'true'.
   /// See docs/TRACING.md.
@@ -165,6 +172,25 @@ class EnvironmentVariables {
   @IsString()
   SOROBAN_RPC_URL!: string;
 
+  /// Code shown alongside ticket prices for the configured contract settlement token.
+  @IsString()
+  @Matches(/^[A-Z0-9]{1,12}$/)
+  @IsOptional()
+  SETTLEMENT_ASSET_CODE?: string;
+
+  /// Number of decimal places in the smallest unit used for ticket prices.
+  @IsInt()
+  @Min(0)
+  @Max(18)
+  @IsOptional()
+  SETTLEMENT_ASSET_DECIMALS?: number;
+
+  /// Bearer token protecting the Prometheus metrics endpoint; unset disables it.
+  @IsString()
+  @MinLength(32)
+  @IsOptional()
+  METRICS_TOKEN?: string;
+
   /// Which Stellar network every contract call targets. Must match the network
   /// the `ticketing` contract is deployed on and the one user wallets are set
   @IsIn(STELLAR_NETWORKS)
@@ -173,6 +199,12 @@ class EnvironmentVariables {
   /// Deployed `ticketing` contract's C... address.
   @IsStellarContractId()
   TICKETING_CONTRACT_ID!: string;
+
+  /// Timeout, in milliseconds, for a single Soroban RPC call before it's
+  /// treated as failed. Default 10000 (10s). See issue #145.
+  @IsInt()
+  @IsOptional()
+  SOROBAN_RPC_TIMEOUT_MS?: number;
 
   /// Platform hot wallet used only as a disposable source account for
   /// read-only contract simulations (verify_ticket, get_event). It signs
@@ -219,11 +251,24 @@ class EnvironmentVariables {
   @IsOptional()
   PENDING_TX_CLEANUP_INTERVAL_MINUTES?: number;
 
+  /// How often to compare cached ticket statuses with `verify_ticket`, in minutes. Defaults to 60.
+  @IsInt()
+  @Min(1)
+  @Max(1440)
+  @IsOptional()
+  TICKET_RECONCILIATION_INTERVAL_MINUTES?: number;
+
   /// How long a cached response for an Idempotency-Key stays valid, in
   /// minutes, before a repeated key is treated as a new request.
   @IsInt()
   @IsOptional()
   IDEMPOTENCY_KEY_TTL_MINUTES?: number;
+
+  /// Ceiling, in stroops, on the platform-paid fee for one sponsored attendee
+  /// transaction when FEATURE_FEE_BUMP is on. Default 100000 (0.01 XLM).
+  @IsInt()
+  @IsOptional()
+  FEE_BUMP_MAX_FEE_STROOPS?: number;
 }
 
 function secretsProvider(env: EnvironmentVariables): string {

@@ -1,6 +1,17 @@
 import { ConflictException, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
+
+jest.mock('bcrypt', () => {
+  const actual = jest.requireActual<typeof import('bcrypt')>('bcrypt');
+  return {
+    ...actual,
+    compare: jest.fn((data: string | Buffer, encrypted: string) =>
+      actual.compare(data, encrypted),
+    ),
+  };
+});
+
 import { AuthService } from './auth.service';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -55,6 +66,28 @@ describe('AuthService', () => {
         }),
       ).rejects.toBeInstanceOf(ConflictException);
       expect(prisma.user.create).not.toHaveBeenCalled();
+    });
+
+    it('normalizes email to trimmed lowercase on register (#387)', async () => {
+      prisma.user.findUnique.mockResolvedValue(null);
+      prisma.user.create.mockImplementation(({ data }) =>
+        Promise.resolve({ id: 'user-1', role: 'ATTENDEE', ...data }),
+      );
+
+      const result = await service.register({
+        email: '  Ada.Lovelace@EXAMPLE.COM  ',
+        password: 'correct-horse-battery',
+        name: 'Ada Lovelace',
+      });
+
+      expect(prisma.user.findUnique).toHaveBeenCalledWith({
+        where: { email: 'ada.lovelace@example.com' },
+      });
+      const createCall = prisma.user.create.mock.calls[0] as [
+        { data: { email: string } },
+      ];
+      expect(createCall[0].data.email).toBe('ada.lovelace@example.com');
+      expect(result.user.email).toBe('ada.lovelace@example.com');
     });
   });
 
@@ -119,6 +152,49 @@ describe('AuthService', () => {
         .catch((e: UnauthorizedException) => e.message);
 
       expect(unknownEmail).toBe(wrongPassword);
+    });
+
+    it('calls bcrypt.compare even when user is not found to prevent timing attacks (#385)', async () => {
+      prisma.user.findUnique.mockResolvedValue(null);
+      (bcrypt.compare as unknown as jest.Mock).mockClear();
+
+      await expect(
+        service.login({ email: 'nobody@example.com', password: 'password123' }),
+      ).rejects.toThrow(new UnauthorizedException('Invalid email or password'));
+
+      expect(bcrypt.compare).toHaveBeenCalledWith(
+        'password123',
+        expect.any(String),
+      );
+    });
+
+    it('normalizes email on login so registering with mixed case and logging in with lowercase succeeds (#387)', async () => {
+      const passwordHash = await bcrypt.hash('correct-horse-battery', 4);
+      prisma.user.findUnique.mockImplementation(
+        ({ where }: { where: { email: string } }) => {
+          if (where.email === 'ana@example.com') {
+            return Promise.resolve({
+              id: 'user-1',
+              email: 'ana@example.com',
+              name: 'Ana',
+              role: 'ATTENDEE',
+              passwordHash,
+            });
+          }
+          return Promise.resolve(null);
+        },
+      );
+
+      const result = await service.login({
+        email: '  Ana@EXAMPLE.COM  ',
+        password: 'correct-horse-battery',
+      });
+
+      expect(result.accessToken).toBe('signed.jwt.token');
+      expect(result.user.email).toBe('ana@example.com');
+      expect(prisma.user.findUnique).toHaveBeenCalledWith({
+        where: { email: 'ana@example.com' },
+      });
     });
   });
 });

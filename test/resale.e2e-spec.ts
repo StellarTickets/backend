@@ -12,6 +12,7 @@ import { PrismaService } from '../src/prisma/prisma.service';
 import { StellarService } from '../src/stellar/stellar.service';
 import { JwtAuthGuard } from '../src/auth/guards/jwt-auth.guard';
 import type { CurrentUserPayload } from '../src/auth/decorators/current-user.decorator';
+import type { Ticket, User } from '@prisma/client';
 import {
   createEvent,
   createOrganization,
@@ -35,7 +36,17 @@ describe('Resale flow (e2e)', () => {
     submitSignedTransaction: jest
       .fn()
       .mockResolvedValue({ txHash: 'b'.repeat(64) }),
+    decodeSignedInvocation: jest.fn(),
+    verifyTicket: jest.fn().mockResolvedValue({ resalePrice: 1100n }),
   };
+
+  /** #376 — the signed envelope lists `ticket` at the body's 1100 price. */
+  function signListing(seller: User, ticket: Ticket) {
+    mockStellarService.decodeSignedInvocation.mockReturnValue({
+      functionName: 'list_for_resale',
+      args: [seller.stellarPublicKey, ticket.chainTicketId, 1100n],
+    });
+  }
 
   async function seedTicket(
     overrides: {
@@ -93,7 +104,9 @@ describe('Resale flow (e2e)', () => {
       .overrideGuard(JwtAuthGuard)
       .useValue({
         canActivate: (context: import('@nestjs/common').ExecutionContext) => {
-          const req = context.switchToHttp().getRequest();
+          const req = context
+            .switchToHttp()
+            .getRequest<{ user?: CurrentUserPayload }>();
           req.user = currentUser;
           return true;
         },
@@ -123,6 +136,7 @@ describe('Resale flow (e2e)', () => {
 
   it('lists a ticket for resale then cancels the listing', async () => {
     const { seller, ticket } = await seedTicket();
+    signListing(seller, ticket);
     currentUser = { userId: seller.id, email: seller.email, role: seller.role };
 
     // Step 1: build the list-resale transaction.
@@ -131,7 +145,9 @@ describe('Resale flow (e2e)', () => {
       .send({ price: '1100' })
       .expect(201)
       .expect((res) => {
-        expect(res.body.unsignedXdr).toBe('unsigned-list-xdr');
+        expect((res.body as { unsignedXdr: string }).unsignedXdr).toBe(
+          'unsigned-list-xdr',
+        );
       });
 
     // Step 2: confirm the list-resale — ticket -> RESALE, listing -> ACTIVE.
@@ -140,8 +156,9 @@ describe('Resale flow (e2e)', () => {
       .send({ price: '1100', signedXdr: 'signed-xdr' })
       .expect(201);
 
-    expect(confirmListRes.body.status).toBe('ACTIVE');
-    const listingId = confirmListRes.body.id as string;
+    const listing = confirmListRes.body as { id: string; status: string };
+    expect(listing.status).toBe('ACTIVE');
+    const listingId = listing.id;
 
     const ticketAfterList = await prisma.ticket.findUniqueOrThrow({
       where: { id: ticket.id },
@@ -152,16 +169,17 @@ describe('Resale flow (e2e)', () => {
     const listRes = await request(app.getHttpServer())
       .get('/v1/tickets/resale')
       .expect(200);
-    expect(
-      listRes.body.items.some((item: { id: string }) => item.id === listingId),
-    ).toBe(true);
+    const { items } = listRes.body as { items: { id: string }[] };
+    expect(items.some((item) => item.id === listingId)).toBe(true);
 
     // Step 3: build + confirm cancel-resale — ticket -> VALID, listing -> CANCELLED.
     await request(app.getHttpServer())
       .post(`/v1/tickets/${ticket.id}/cancel-resale`)
       .expect(201)
       .expect((res) => {
-        expect(res.body.unsignedXdr).toBe('unsigned-cancel-xdr');
+        expect((res.body as { unsignedXdr: string }).unsignedXdr).toBe(
+          'unsigned-cancel-xdr',
+        );
       });
 
     await request(app.getHttpServer())
@@ -191,13 +209,15 @@ describe('Resale flow (e2e)', () => {
     });
 
     // List as the seller.
+    signListing(seller, ticket);
     currentUser = { userId: seller.id, email: seller.email, role: seller.role };
     const confirmListRes = await request(app.getHttpServer())
       .post(`/v1/tickets/${ticket.id}/confirm-list-resale`)
       .send({ price: '1100', signedXdr: 'signed-xdr' })
       .expect(201);
-    const listingId = confirmListRes.body.id as string;
-    expect(confirmListRes.body.status).toBe('ACTIVE');
+    const listing = confirmListRes.body as { id: string; status: string };
+    const listingId = listing.id;
+    expect(listing.status).toBe('ACTIVE');
 
     // Buy as the buyer.
     currentUser = { userId: buyer.id, email: buyer.email, role: buyer.role };
@@ -205,7 +225,9 @@ describe('Resale flow (e2e)', () => {
       .post(`/v1/tickets/${ticket.id}/buy-resale`)
       .expect(201)
       .expect((res) => {
-        expect(res.body.unsignedXdr).toBe('unsigned-buy-xdr');
+        expect((res.body as { unsignedXdr: string }).unsignedXdr).toBe(
+          'unsigned-buy-xdr',
+        );
       });
 
     const confirmBuyRes = await request(app.getHttpServer())
@@ -213,8 +235,9 @@ describe('Resale flow (e2e)', () => {
       .send({ signedXdr: 'signed-xdr' })
       .expect(201);
 
-    expect(confirmBuyRes.body.ownerId).toBe(buyer.id);
-    expect(confirmBuyRes.body.status).toBe('VALID');
+    const bought = confirmBuyRes.body as { ownerId: string; status: string };
+    expect(bought.ownerId).toBe(buyer.id);
+    expect(bought.status).toBe('VALID');
 
     const listingAfterBuy = await prisma.resaleListing.findUniqueOrThrow({
       where: { id: listingId },
@@ -274,6 +297,7 @@ describe('Resale flow (e2e)', () => {
 
   it('does not allow two ACTIVE resale listings for the same ticket (#216)', async () => {
     const { seller, ticket } = await seedTicket();
+    signListing(seller, ticket);
     currentUser = { userId: seller.id, email: seller.email, role: seller.role };
 
     // Two concurrent confirm-list-resale calls race the application-level
@@ -291,11 +315,66 @@ describe('Resale flow (e2e)', () => {
 
     expect(succeeded).toHaveLength(1);
     expect(conflicted).toHaveLength(1);
-    expect(conflicted[0].body.message).toMatch(/active resale listing/i);
+    expect((conflicted[0].body as { message: string }).message).toMatch(
+      /active resale listing/i,
+    );
 
     const activeListings = await prisma.resaleListing.count({
       where: { ticketId: ticket.id, status: 'ACTIVE' },
     });
     expect(activeListings).toBe(1);
+  });
+
+  it('removes a revoked ticket’s listing from the marketplace (#379)', async () => {
+    // `@IsSignedXdr` only admits base64; StellarService is mocked anyway.
+    const signedXdr = Buffer.from('signed-xdr').toString('base64');
+    const { seller, organization, ticket } = await seedTicket();
+    const organizer = await prisma.user.create({
+      data: createUser({
+        id: randomUUID(),
+        email: `organizer-${randomUUID()}@example.com`,
+      }),
+    });
+    await prisma.organizationMember.create({
+      data: {
+        organizationId: organization.id,
+        userId: organizer.id,
+        role: 'OWNER',
+      },
+    });
+
+    signListing(seller, ticket);
+    currentUser = { userId: seller.id, email: seller.email, role: seller.role };
+    const confirmListRes = await request(app.getHttpServer())
+      .post(`/v1/tickets/${ticket.id}/confirm-list-resale`)
+      .send({ price: '1100', signedXdr })
+      .expect(201);
+    const { id: listingId } = confirmListRes.body as { id: string };
+
+    const isListed = async () => {
+      const res = await request(app.getHttpServer())
+        .get('/v1/tickets/resale')
+        .expect(200);
+      const { items } = res.body as { items: { id: string }[] };
+      return items.some((item) => item.id === listingId);
+    };
+    expect(await isListed()).toBe(true);
+
+    currentUser = {
+      userId: organizer.id,
+      email: organizer.email,
+      role: organizer.role,
+    };
+    const revokeRes = await request(app.getHttpServer())
+      .post(`/v1/tickets/${ticket.id}/confirm-revoke`)
+      .send({ signedXdr })
+      .expect(201);
+    expect((revokeRes.body as { status: string }).status).toBe('REVOKED');
+
+    expect(await isListed()).toBe(false);
+    const listingAfterRevoke = await prisma.resaleListing.findUniqueOrThrow({
+      where: { id: listingId },
+    });
+    expect(listingAfterRevoke.status).toBe('CANCELLED');
   });
 });

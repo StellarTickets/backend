@@ -116,5 +116,17 @@ describe('UsersService', () => {
         service.lookupByEmail('nobody@example.com'),
       ).rejects.toBeInstanceOf(NotFoundException);
     });
+
+    it('normalizes email to trimmed lowercase before querying (#387)', async () => {
+      prisma.user.findUnique.mockResolvedValue({ id: 'user-1', name: 'Ana' });
+
+      const result = await service.lookupByEmail('  Ana@Example.Com  ');
+
+      expect(prisma.user.findUnique).toHaveBeenCalledWith({
+        where: { email: 'ana@example.com' },
+        select: { id: true, name: true },
+      });
+      expect(result).toEqual({ id: 'user-1', name: 'Ana' });
+    });
   });
 });

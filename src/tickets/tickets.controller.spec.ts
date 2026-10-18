@@ -3,7 +3,9 @@ import {
   INTERCEPTORS_METADATA,
 } from '@nestjs/common/constants';
 import {
+  BadRequestException,
   ConflictException,
+  ForbiddenException,
   INestApplication,
   NotFoundException,
 } from '@nestjs/common';
@@ -36,9 +38,13 @@ describe('TicketsController', () => {
     verify: jest.fn(),
     getOfflinePublicKeys: jest.fn(),
     findByChainTicketId: jest.fn(),
+    findOne: jest.fn(),
+    getQrImage: jest.fn(),
+    issueQrToken: jest.fn(),
     getOfflineToken: jest.fn(),
     buildIssueTx: jest.fn(),
     confirmIssue: jest.fn(),
+    buildIssueBatch: jest.fn(),
     buildPurchaseTx: jest.fn(),
     confirmPurchase: jest.fn(),
     buildTransferTx: jest.fn(),
@@ -116,8 +122,12 @@ describe('TicketsController', () => {
     ['get', '/tickets/verify/secret'],
     ['get', '/tickets/offline-public-keys'],
     ['get', '/tickets/by-chain/1'],
+    ['get', `/tickets/${UUID}`],
+    ['get', `/tickets/${UUID}/qr`],
+    ['get', `/tickets/${UUID}/qr-token`],
     ['get', `/tickets/${UUID}/offline-token`],
     ['post', '/tickets/issue'],
+    ['post', '/tickets/issue-batch'],
     ['post', '/tickets/confirm-issue'],
     ['post', '/tickets/purchase'],
     ['post', '/tickets/confirm-purchase'],
@@ -216,6 +226,73 @@ describe('TicketsController', () => {
       expect(service.findByChainTicketId).not.toHaveBeenCalled();
     });
 
+    it('GET /:ticketId returns the ticket for the caller (#121)', async () => {
+      service.findOne.mockResolvedValue({ id: 't1' });
+      const res = await http().get('/tickets/t1').set(AUTH).expect(200);
+      expect(res.body).toEqual({ id: 't1' });
+      expect(service.findOne).toHaveBeenCalledWith(uid, 't1');
+    });
+
+    it('GET /:ticketId propagates 403 and 404 (#121)', async () => {
+      service.findOne.mockRejectedValueOnce(new ForbiddenException());
+      await http().get('/tickets/t1').set(AUTH).expect(403);
+
+      service.findOne.mockRejectedValueOnce(new NotFoundException());
+      await http().get('/tickets/t2').set(AUTH).expect(404);
+    });
+
+    it('GET /:ticketId does not shadow the static ticket routes', async () => {
+      service.findMine.mockResolvedValue([]);
+      service.findActiveResaleListings.mockResolvedValue({ items: [] });
+      await http().get('/tickets/mine').set(AUTH).expect(200);
+      await http().get('/tickets/resale').set(AUTH).expect(200);
+      expect(service.findOne).not.toHaveBeenCalled();
+    });
+
+    it('GET /:ticketId/qr serves the PNG uncached (#125)', async () => {
+      const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+      service.getQrImage.mockResolvedValue(png);
+
+      const res = await http().get('/tickets/t1/qr').set(AUTH).expect(200);
+
+      expect(res.headers['content-type']).toBe('image/png');
+      expect(res.headers['cache-control']).toBe('no-store');
+      expect(Buffer.isBuffer(res.body)).toBe(true);
+      expect((res.body as Buffer).equals(png)).toBe(true);
+      expect(service.getQrImage).toHaveBeenCalledWith(uid, 't1');
+    });
+
+    it('GET /:ticketId/qr propagates 403 for a non-owner and 404 (#125)', async () => {
+      service.getQrImage.mockRejectedValueOnce(new ForbiddenException());
+      await http().get('/tickets/t1/qr').set(AUTH).expect(403);
+
+      service.getQrImage.mockRejectedValueOnce(new NotFoundException());
+      await http().get('/tickets/t2/qr').set(AUTH).expect(404);
+    });
+
+    it('GET /:ticketId/qr-token returns a fresh uncached token (#129)', async () => {
+      const issued = {
+        token: 'v1.t1.1790592030.sig',
+        expiresAt: '2026-10-17T12:00:30.000Z',
+        ttlSeconds: 30,
+      };
+      service.issueQrToken.mockResolvedValue(issued);
+
+      const res = await http()
+        .get('/tickets/t1/qr-token')
+        .set(AUTH)
+        .expect(200);
+
+      expect(res.body).toEqual(issued);
+      expect(res.headers['cache-control']).toBe('no-store');
+      expect(service.issueQrToken).toHaveBeenCalledWith(uid, 't1');
+    });
+
+    it('GET /:ticketId/qr-token propagates 403 for a non-owner (#129)', async () => {
+      service.issueQrToken.mockRejectedValueOnce(new ForbiddenException());
+      await http().get('/tickets/t1/qr-token').set(AUTH).expect(403);
+    });
+
     it('GET /:ticketId/offline-token propagates not-found', async () => {
       service.getOfflineToken.mockResolvedValueOnce({ token: 't' });
       await http().get('/tickets/t1/offline-token').set(AUTH).expect(200);
@@ -273,7 +350,7 @@ describe('TicketsController', () => {
       await http()
         .post('/tickets/confirm-issue')
         .set(AUTH)
-        .send({ ...body, signedXdr: 'sx' })
+        .send({ ...body, signedXdr: 'AAAA' })
         .expect(201);
       expect(service.confirmIssue).toHaveBeenCalledWith(
         uid,
@@ -281,7 +358,7 @@ describe('TicketsController', () => {
         UUID2,
         KEY,
         'A1',
-        'sx',
+        'AAAA',
       );
     });
 
@@ -298,9 +375,74 @@ describe('TicketsController', () => {
       const res = await http()
         .post('/tickets/confirm-issue')
         .set(AUTH)
-        .send({ ...body, signedXdr: 'sx' })
+        .send({ ...body, signedXdr: 'AAAA' })
         .expect(409);
       expect((res.body as { message: string }).message).toBe('Seat taken');
+    });
+
+    it('POST /confirm-issue returns 409 when the seat is already taken for the event (#135)', async () => {
+      service.confirmIssue.mockRejectedValue(
+        new ConflictException('That seat has already been issued for this event'),
+      );
+      const res = await http()
+        .post('/tickets/confirm-issue')
+        .set(AUTH)
+        .send({ ...body, signedXdr: 'sx' })
+        .expect(409);
+      expect((res.body as { message: string }).message).toBe(
+        'That seat has already been issued for this event',
+      );
+    });
+  });
+
+  describe('issue-batch', () => {
+    const recipient = { toUserId: UUID2, toPublicKey: KEY };
+    const body = { ticketTypeId: UUID, recipients: [recipient] };
+
+    it('POST /issue-batch forwards ticketTypeId and recipients to the service', async () => {
+      service.buildIssueBatch.mockResolvedValue({ total: 1, succeeded: 1, failed: 0, results: [] });
+      await http().post('/tickets/issue-batch').set(AUTH).send(body).expect(201);
+      expect(service.buildIssueBatch).toHaveBeenCalledWith(uid, UUID, [recipient]);
+    });
+
+    it('POST /issue-batch rejects a non-UUID ticketTypeId', async () => {
+      await http()
+        .post('/tickets/issue-batch')
+        .set(AUTH)
+        .send({ ...body, ticketTypeId: 'not-uuid' })
+        .expect(400);
+      expect(service.buildIssueBatch).not.toHaveBeenCalled();
+    });
+
+    it('POST /issue-batch rejects an empty recipients array', async () => {
+      await http()
+        .post('/tickets/issue-batch')
+        .set(AUTH)
+        .send({ ticketTypeId: UUID, recipients: [] })
+        .expect(400);
+      expect(service.buildIssueBatch).not.toHaveBeenCalled();
+    });
+
+    it('POST /issue-batch rejects a recipient with an invalid public key', async () => {
+      await http()
+        .post('/tickets/issue-batch')
+        .set(AUTH)
+        .send({ ticketTypeId: UUID, recipients: [{ toUserId: UUID2, toPublicKey: 'bad' }] })
+        .expect(400);
+      expect(service.buildIssueBatch).not.toHaveBeenCalled();
+    });
+
+    it('POST /issue-batch returns 400 when the batch exceeds the configured max size', async () => {
+      service.buildIssueBatch.mockRejectedValue(
+        new BadRequestException('Batch size exceeds the maximum of 50 recipients'),
+      );
+      const bigBatch = Array.from({ length: 51 }, () => recipient);
+      const res = await http()
+        .post('/tickets/issue-batch')
+        .set(AUTH)
+        .send({ ticketTypeId: UUID, recipients: bigBatch })
+        .expect(400);
+      expect((res.body as { message: string }).message).toContain('Batch size exceeds');
     });
   });
 
@@ -336,7 +478,7 @@ describe('TicketsController', () => {
         .send({
           ticketTypeId: UUID,
           seat: 'B2',
-          signedXdr: 'sx',
+          signedXdr: 'AAAA',
           promoCode: 'SAVE10',
         })
         .expect(201);
@@ -344,7 +486,7 @@ describe('TicketsController', () => {
         uid,
         UUID,
         'B2',
-        'sx',
+        'AAAA',
         'SAVE10',
       );
     });
@@ -395,21 +537,21 @@ describe('TicketsController', () => {
       await http()
         .post('/tickets/t1/confirm-transfer')
         .set(AUTH)
-        .send({ ...body, signedXdr: 'sx' })
+        .send({ ...body, signedXdr: 'AAAA' })
         .expect(201);
       expect(service.confirmTransfer).toHaveBeenCalledWith(
         uid,
         't1',
         UUID2,
         KEY,
-        'sx',
+        'AAAA',
       );
 
       service.confirmTransfer.mockRejectedValueOnce(new NotFoundException());
       await http()
         .post('/tickets/t9/confirm-transfer')
         .set(AUTH)
-        .send({ ...body, signedXdr: 'sx' })
+        .send({ ...body, signedXdr: 'AAAA' })
         .expect(404);
     });
   });
@@ -426,12 +568,12 @@ describe('TicketsController', () => {
       await http()
         .post('/tickets/t1/confirm-check-in')
         .set(AUTH)
-        .send({ signedXdr: 'sx', gateId: UUID, reason: 'override' })
+        .send({ signedXdr: 'AAAA', gateId: UUID, reason: 'override' })
         .expect(201);
       expect(service.confirmCheckIn).toHaveBeenCalledWith(
         uid,
         't1',
-        'sx',
+        'AAAA',
         UUID,
         'override',
       );
@@ -441,7 +583,7 @@ describe('TicketsController', () => {
       await http()
         .post('/tickets/t1/confirm-check-in')
         .set(AUTH)
-        .send({ signedXdr: 'sx', gateId: 'gate' })
+        .send({ signedXdr: 'AAAA', gateId: 'gate' })
         .expect(400);
       expect(service.confirmCheckIn).not.toHaveBeenCalled();
     });
@@ -459,16 +601,16 @@ describe('TicketsController', () => {
       await http()
         .post('/tickets/t1/confirm-revoke')
         .set(AUTH)
-        .send({ signedXdr: 'sx' })
+        .send({ signedXdr: 'AAAA' })
         .expect(201);
-      expect(service.confirmRevoke).toHaveBeenCalledWith(uid, 't1', 'sx');
+      expect(service.confirmRevoke).toHaveBeenCalledWith(uid, 't1', 'AAAA');
     });
 
     it('POST /:ticketId/confirm-revoke rejects a bad txHash', async () => {
       await http()
         .post('/tickets/t1/confirm-revoke')
         .set(AUTH)
-        .send({ signedXdr: 'sx', txHash: 'nope' })
+        .send({ signedXdr: 'AAAA', txHash: 'nope' })
         .expect(400);
     });
 
@@ -531,13 +673,13 @@ describe('TicketsController', () => {
       await http()
         .post('/tickets/t1/confirm-list-resale')
         .set(AUTH)
-        .send({ price: '5000', signedXdr: 'sx', expiresAt })
+        .send({ price: '5000', signedXdr: 'AAAA', expiresAt })
         .expect(201);
       expect(service.confirmListForResale).toHaveBeenCalledWith(
         uid,
         't1',
         '5000',
-        'sx',
+        'AAAA',
         expiresAt,
       );
     });
@@ -594,9 +736,9 @@ describe('TicketsController', () => {
       await http()
         .post('/tickets/t1/confirm-buy-resale')
         .set(AUTH)
-        .send({ signedXdr: 'sx' })
+        .send({ signedXdr: 'AAAA' })
         .expect(201);
-      expect(service.confirmBuyResale).toHaveBeenCalledWith(uid, 't1', 'sx');
+      expect(service.confirmBuyResale).toHaveBeenCalledWith(uid, 't1', 'AAAA');
 
       service.confirmBuyResale.mockRejectedValueOnce(
         new ConflictException('Already sold'),
@@ -604,7 +746,7 @@ describe('TicketsController', () => {
       await http()
         .post('/tickets/t1/confirm-buy-resale')
         .set(AUTH)
-        .send({ signedXdr: 'sx' })
+        .send({ signedXdr: 'AAAA' })
         .expect(409);
     });
   });

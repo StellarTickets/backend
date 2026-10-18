@@ -5,6 +5,9 @@ import { json } from 'express';
 import helmet from 'helmet';
 import { applyApiPrefix } from './config/api-prefix';
 import { parseTrustProxy } from './config/trust-proxy';
+import { requestIdMiddleware } from './common/middleware/request-id.middleware';
+import { createHttpMetricsMiddleware } from './common/metrics/http-metrics.middleware';
+import type { MetricsService } from './common/metrics/metrics.service';
 
 /**
  * HTTP-level app configuration, shared by `main.ts` and the HTTP specs so
@@ -13,7 +16,12 @@ import { parseTrustProxy } from './config/trust-proxy';
 export function configureApp(
   app: NestExpressApplication,
   config: ConfigService,
+  metrics?: MetricsService,
 ): void {
+  // Ensure every request and response has an X-Request-Id header.
+  app.use(requestIdMiddleware);
+  if (metrics) app.use(createHttpMetricsMiddleware(metrics));
+
   // Resolve `req.ip` from X-Forwarded-For only for proxies we trust —
   // see docs/DEPLOYMENT.md.
   app.set('trust proxy', parseTrustProxy(config.get<string>('TRUST_PROXY')));

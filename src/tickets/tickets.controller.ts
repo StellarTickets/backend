@@ -2,14 +2,17 @@ import {
   Body,
   Controller,
   Get,
+  Header,
   NotFoundException,
   Param,
   Patch,
   Post,
   Query,
+  Res,
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import type { CurrentUserPayload } from '../auth/decorators/current-user.decorator';
@@ -30,6 +33,7 @@ import { ConfirmListForResaleDto } from './dto/confirm-list-for-resale.dto';
 import { UpdateResalePriceDto } from './dto/update-resale-price.dto';
 import { ResaleListingsQueryDto } from './dto/resale-listings-query.dto';
 import { RevokeBatchDto } from './dto/revoke-batch.dto';
+import { IssueBatchDto } from './dto/issue-batch.dto';
 
 /** Parses a route param into the BigInt `chainTicketId`, treating a malformed value as "not found". */
 function parseChainTicketId(raw: string): bigint {
@@ -86,6 +90,40 @@ export class TicketsController {
     );
   }
 
+  /** #121 — One ticket, for its owner or staff of the event's organization. */
+  @Get(':ticketId')
+  findOne(
+    @CurrentUser() user: CurrentUserPayload,
+    @Param('ticketId') ticketId: string,
+  ) {
+    return this.ticketsService.findOne(user.userId, ticketId);
+  }
+
+  /**
+   * #125 — PNG of the ticket's QR code, owner only. Written to the response
+   * directly: the global BigInt serializer would flatten a returned Buffer.
+   */
+  @Get(':ticketId/qr')
+  async getQrImage(
+    @CurrentUser() user: CurrentUserPayload,
+    @Param('ticketId') ticketId: string,
+    @Res() res: Response,
+  ) {
+    const png = await this.ticketsService.getQrImage(user.userId, ticketId);
+    res.set({ 'Content-Type': 'image/png', 'Cache-Control': 'no-store' });
+    res.send(png);
+  }
+
+  /** #129 — Short-lived signed token to render in place of the static QR secret, owner only. */
+  @Get(':ticketId/qr-token')
+  @Header('Cache-Control', 'no-store')
+  getQrToken(
+    @CurrentUser() user: CurrentUserPayload,
+    @Param('ticketId') ticketId: string,
+  ) {
+    return this.ticketsService.issueQrToken(user.userId, ticketId);
+  }
+
   @Get(':ticketId/offline-token')
   getOfflineToken(
     @CurrentUser() user: CurrentUserPayload,
@@ -106,6 +144,19 @@ export class TicketsController {
       dto.toUserId,
       dto.toPublicKey,
       dto.seat,
+    );
+  }
+
+  /** #133 — Batch-build issue_ticket envelopes, one per recipient (up to ISSUE_BATCH_MAX_SIZE). */
+  @Post('issue-batch')
+  buildIssueBatch(
+    @CurrentUser() user: CurrentUserPayload,
+    @Body() dto: IssueBatchDto,
+  ) {
+    return this.ticketsService.buildIssueBatch(
+      user.userId,
+      dto.ticketTypeId,
+      dto.recipients,
     );
   }
 

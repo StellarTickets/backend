@@ -11,6 +11,16 @@ import { LoginDto } from './dto/login.dto';
 
 const BCRYPT_ROUNDS = 12;
 
+/**
+ * #385 — fixed dummy bcrypt hash used when an email is unknown, ensuring
+ * `bcrypt.compare` executes and takes equivalent computation time regardless
+ * of whether the account exists.
+ */
+const DUMMY_HASH =
+  '$2b$12$Mm25jOsvB1cT9TlV02n5tebZEwmESUQ0Vuyz2bg9GmInAxSoKG5ae';
+
+const normalizeEmail = (email: string) => email.trim().toLowerCase();
+
 export interface AuthResult {
   accessToken: string;
   user: { id: string; email: string; name: string; role: string };
@@ -24,8 +34,9 @@ export class AuthService {
   ) {}
 
   async register(dto: RegisterDto): Promise<AuthResult> {
+    const email = normalizeEmail(dto.email);
     const existing = await this.prisma.user.findUnique({
-      where: { email: dto.email },
+      where: { email },
     });
     if (existing) {
       throw new ConflictException('An account with this email already exists');
@@ -33,17 +44,22 @@ export class AuthService {
 
     const passwordHash = await bcrypt.hash(dto.password, BCRYPT_ROUNDS);
     const user = await this.prisma.user.create({
-      data: { email: dto.email, passwordHash, name: dto.name },
+      data: { email, passwordHash, name: dto.name },
     });
 
     return this.buildAuthResult(user.id, user.email, user.name, user.role);
   }
 
   async login(dto: LoginDto): Promise<AuthResult> {
+    const email = normalizeEmail(dto.email);
     const user = await this.prisma.user.findUnique({
-      where: { email: dto.email },
+      where: { email },
     });
-    if (!user || !(await bcrypt.compare(dto.password, user.passwordHash))) {
+
+    const hashToCompare = user ? user.passwordHash : DUMMY_HASH;
+    const passwordValid = await bcrypt.compare(dto.password, hashToCompare);
+
+    if (!user || !passwordValid) {
       throw new UnauthorizedException('Invalid email or password');
     }
 

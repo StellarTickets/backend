@@ -1,8 +1,11 @@
 import {
+  Account,
   BASE_FEE,
   Keypair,
+  Operation,
   nativeToScVal,
   Networks,
+  StrKey,
   Transaction,
   TransactionBuilder,
 } from '@stellar/stellar-sdk';
@@ -15,8 +18,10 @@ import {
 } from '../../test/helpers/stellar-harness';
 import {
   eventScVal,
+  sendDuplicate,
   sendPending,
   sendRejected,
+  sendTryAgainLater,
   simulationError,
   simulationSuccess,
   ticketScVal,
@@ -372,6 +377,63 @@ describe('StellarService (contract-mock harness)', () => {
       expect(server.getTransaction).not.toHaveBeenCalled();
     });
 
+    it('handles DUPLICATE by polling the existing transaction hash (#384)', async () => {
+      const { service, server } = createStellarHarness();
+      server.sendTransaction.mockResolvedValue(sendDuplicate());
+      server.getTransaction.mockResolvedValue(
+        txSuccess(nativeToScVal(CHAIN_TICKET_ID, { type: 'u64' })),
+      );
+      const signed = await signedIssueEnvelope(service);
+
+      const result = await service.submitSignedTransaction(signed);
+
+      expect(result).toEqual({ result: CHAIN_TICKET_ID, txHash: TX_HASH });
+      expect(server.sendTransaction).toHaveBeenCalledTimes(1);
+      expect(server.getTransaction).toHaveBeenCalledWith(TX_HASH);
+    });
+
+    it('retries TRY_AGAIN_LATER with backoff and succeeds when subsequent attempt returns PENDING (#384)', async () => {
+      const { service, server } = createStellarHarness();
+      const signed = await signedIssueEnvelope(service);
+      jest.useFakeTimers();
+
+      server.sendTransaction
+        .mockResolvedValueOnce(sendTryAgainLater())
+        .mockResolvedValueOnce(sendPending());
+      server.getTransaction.mockResolvedValue(
+        txSuccess(nativeToScVal(CHAIN_TICKET_ID, { type: 'u64' })),
+      );
+
+      const pending = service.submitSignedTransaction(signed);
+      await jest.advanceTimersByTimeAsync(1_000);
+
+      await expect(pending).resolves.toEqual({
+        result: CHAIN_TICKET_ID,
+        txHash: TX_HASH,
+      });
+      expect(server.sendTransaction).toHaveBeenCalledTimes(2);
+      expect(server.getTransaction).toHaveBeenCalledWith(TX_HASH);
+    });
+
+    it('fails fast when TRY_AGAIN_LATER persists across bounded retries without polling (#384)', async () => {
+      const { service, server } = createStellarHarness();
+      const signed = await signedIssueEnvelope(service);
+      jest.useFakeTimers();
+
+      server.sendTransaction.mockResolvedValue(sendTryAgainLater());
+
+      const expectation = expect(
+        service.submitSignedTransaction(signed),
+      ).rejects.toThrow(
+        /Soroban submission failed: TRY_AGAIN_LATER after 3 retries/,
+      );
+      await jest.advanceTimersByTimeAsync(10_000);
+
+      await expectation;
+      expect(server.sendTransaction).toHaveBeenCalledTimes(4);
+      expect(server.getTransaction).not.toHaveBeenCalled();
+    });
+
     it('throws when the transaction fails on-chain', async () => {
       const { service, server } = createStellarHarness();
       server.sendTransaction.mockResolvedValue(sendPending());
@@ -467,6 +529,113 @@ describe('StellarService (contract-mock harness)', () => {
       const relayed = server.sendTransaction.mock.calls[0][0];
       const signature = relayed.signatures[0].signature();
       expect(organizer.verify(relayed.hash(), signature)).toBe(false);
+    });
+  });
+
+  describe('decodeSignedInvocation (#375-#377)', () => {
+    it('decodes the contract call and native arguments of a signed envelope', async () => {
+      const { service } = createStellarHarness();
+      const unsigned = await service.buildIssueTicketTx({
+        organizerPublicKey: ORGANIZER,
+        chainEventId: CHAIN_EVENT_ID,
+        toPublicKey: ATTENDEE,
+        tier: 'GA',
+        seat: 'A-12',
+        price: 1_000_000n,
+      });
+      const signed = signAsWallet(unsigned, Networks.TESTNET, organizer);
+
+      expect(service.decodeSignedInvocation(signed)).toEqual({
+        functionName: 'issue_ticket',
+        args: [ORGANIZER, CHAIN_EVENT_ID, ATTENDEE, 'GA', 'A-12', 1_000_000n],
+      });
+    });
+
+    it('decodes the inner call of a fee-bump envelope', async () => {
+      const { service } = createStellarHarness();
+      const unsigned = await service.buildTransferTicketTx({
+        fromPublicKey: ATTENDEE,
+        chainTicketId: CHAIN_TICKET_ID,
+        toPublicKey: BUYER,
+      });
+      const inner = TransactionBuilder.fromXDR(
+        signAsWallet(unsigned, Networks.TESTNET, attendee),
+        Networks.TESTNET,
+      ) as Transaction;
+      const feeBump = TransactionBuilder.buildFeeBumpTransaction(
+        buyer,
+        '1000',
+        inner,
+        Networks.TESTNET,
+      );
+      feeBump.sign(buyer);
+
+      expect(service.decodeSignedInvocation(feeBump.toXDR())).toEqual({
+        functionName: 'transfer_ticket',
+        args: [ATTENDEE, CHAIN_TICKET_ID, BUYER],
+      });
+    });
+
+    it('rejects a call on a different contract', async () => {
+      const { service } = createStellarHarness();
+      const other = createStellarHarness({
+        contractId: StrKey.encodeContract(Buffer.alloc(32, 9)),
+      });
+      const unsigned = await other.service.buildListForResaleTx({
+        ownerPublicKey: ATTENDEE,
+        chainTicketId: CHAIN_TICKET_ID,
+        price: 1n,
+      });
+
+      expect(() => service.decodeSignedInvocation(unsigned)).toThrow(
+        /unexpected contract/,
+      );
+    });
+
+    it('rejects an envelope that is not a single contract invocation', () => {
+      const { service } = createStellarHarness();
+      const payment = new TransactionBuilder(new Account(ATTENDEE, '1'), {
+        fee: BASE_FEE,
+        networkPassphrase: Networks.TESTNET,
+      })
+        .addOperation(Operation.bumpSequence({ bumpTo: '10' }))
+        .setTimeout(30)
+        .build();
+
+      expect(() => service.decodeSignedInvocation(payment.toXDR())).toThrow(
+        /Expected invokeHostFunction/,
+      );
+    });
+
+    it('rejects an envelope with more than one operation', () => {
+      const { service } = createStellarHarness();
+      const tx = new TransactionBuilder(new Account(ATTENDEE, '1'), {
+        fee: BASE_FEE,
+        networkPassphrase: Networks.TESTNET,
+      })
+        .addOperation(Operation.bumpSequence({ bumpTo: '10' }))
+        .addOperation(Operation.bumpSequence({ bumpTo: '11' }))
+        .setTimeout(30)
+        .build();
+
+      expect(() => service.decodeSignedInvocation(tx.toXDR())).toThrow(
+        /Expected one operation, got 2/,
+      );
+    });
+
+    it('rejects a host function that is not a contract invocation', () => {
+      const { service } = createStellarHarness();
+      const tx = new TransactionBuilder(new Account(ATTENDEE, '1'), {
+        fee: BASE_FEE,
+        networkPassphrase: Networks.TESTNET,
+      })
+        .addOperation(Operation.uploadContractWasm({ wasm: Buffer.alloc(8) }))
+        .setTimeout(30)
+        .build();
+
+      expect(() => service.decodeSignedInvocation(tx.toXDR())).toThrow(
+        /Expected a contract invocation/,
+      );
     });
   });
 
@@ -661,6 +830,39 @@ describe('StellarService (contract-mock harness)', () => {
       await expect(service.getEvent(CHAIN_EVENT_ID)).rejects.toThrow(
         'Soroban simulation for get_event returned no result',
       );
+    });
+
+    it('retries a 5xx/network RPC failure with backoff, then succeeds (#143)', async () => {
+      const { service, server } = createStellarHarness();
+      jest.useFakeTimers();
+      const event = eventScVal({
+        organizer: ORGANIZER,
+        name: 'Retry Night',
+        category: 'CONCERTS',
+        maxResaleMultiplierBps: 11_000,
+        royaltyBps: 500,
+        ticketsIssued: 1n,
+      });
+      server.simulateTransaction
+        .mockRejectedValueOnce(Object.assign(new Error('ECONNRESET')))
+        .mockRejectedValueOnce(Object.assign(new Error('5xx'), { response: { status: 503 } }))
+        .mockResolvedValueOnce(simulationSuccess(event));
+
+      const pending = service.getEvent(CHAIN_EVENT_ID);
+      await jest.advanceTimersByTimeAsync(5_000);
+
+      await expect(pending).resolves.toMatchObject({ name: 'Retry Night' });
+      expect(server.simulateTransaction).toHaveBeenCalledTimes(3);
+    });
+
+    it('does not retry a non-retryable (4xx-shaped) RPC failure (#143)', async () => {
+      const { service, server } = createStellarHarness();
+      server.simulateTransaction.mockRejectedValue(
+        Object.assign(new Error('bad request'), { response: { status: 400 } }),
+      );
+
+      await expect(service.getEvent(CHAIN_EVENT_ID)).rejects.toThrow('bad request');
+      expect(server.simulateTransaction).toHaveBeenCalledTimes(1);
     });
   });
 

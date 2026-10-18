@@ -3,9 +3,11 @@ import { ConfigService } from '@nestjs/config';
 import {
   Address,
   Contract,
+  FeeBumpTransaction,
   Keypair,
   nativeToScVal,
   scValToNative,
+  Transaction,
   TransactionBuilder,
   rpc,
   BASE_FEE,
@@ -16,6 +18,7 @@ import {
   NETWORK_PASSPHRASES,
   StellarNetwork,
 } from '../config/stellar-networks';
+import { mapSorobanErrorToApiException } from './soroban-errors';
 
 export interface OnChainTicket {
   eventId: bigint;
@@ -35,6 +38,25 @@ export interface OnChainEvent {
   maxResaleMultiplierBps: number;
   royaltyBps: number;
   ticketsIssued: bigint;
+}
+
+/** A ticketing-contract event the chain indexer applies (#163). */
+export interface ChainTicketEvent {
+  /** RPC event id; unique per emitted event, so it dedupes re-delivery. */
+  id: string;
+  pagingToken: string;
+  ledger: number;
+  /** Event topic, e.g. `TicketIssued` or `TicketCheckedIn`. */
+  name: string;
+  /** Ticket the event refers to, or null when the payload carries none. */
+  chainTicketId: bigint | null;
+}
+
+/** The single ticketing-contract call carried by a signed envelope. */
+export interface SignedInvocation {
+  functionName: string;
+  /** Arguments decoded to native values (bigint, string, number). */
+  args: unknown[];
 }
 
 /**
@@ -65,15 +87,72 @@ const DEFAULT_POLL_TIMEOUT_SECONDS = 15;
 /** Interval between `getTransaction` polls while awaiting a result. */
 const POLL_INTERVAL_MS = 1_000;
 
+/** #384 — Max retry attempts when `sendTransaction` returns TRY_AGAIN_LATER. */
+const MAX_SUBMIT_RETRIES = 3;
+
+/** #384 — Initial backoff delay in ms when retrying TRY_AGAIN_LATER. */
+const INITIAL_SUBMIT_BACKOFF_MS = 1_000;
+
+/** #145 — Default per-call Soroban RPC timeout. Override with SOROBAN_RPC_TIMEOUT_MS. */
+const DEFAULT_RPC_TIMEOUT_MS = 10_000;
+
+/**
+ * Default ceiling on the platform-paid fee for one sponsored attendee
+ * transaction, in stroops (100_000 = 0.01 XLM). Override with
+ * FEE_BUMP_MAX_FEE_STROOPS.
+ */
+const DEFAULT_FEE_BUMP_MAX_FEE_STROOPS = 100_000;
+
+/** Options for `submitSignedTransaction`. */
+export interface SubmitOptions {
+  /** Wrap the envelope in a platform-funded fee bump (#161). Off by default. */
+  sponsorFee?: boolean;
+}
+
+/** #143 — capped retries for a transient RPC call, before the circuit breaker sees it. */
+const MAX_RPC_RETRIES = 3;
+const INITIAL_RPC_BACKOFF_MS = 200;
+
+/** Network errors (no HTTP response) and 5xx — not a 4xx, which won't succeed on retry. */
+function isRetryableRpcError(error: unknown): boolean {
+  const status = (error as { response?: { status?: number } } | undefined)
+    ?.response?.status;
+  if (status !== undefined) return status >= 500;
+  return true; // no response at all: DNS, connection reset, timeout, etc.
+}
+
+async function withRetry<T>(
+  operation: () => Promise<T>,
+  maxRetries: number,
+  initialBackoffMs: number,
+): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      if (attempt === maxRetries || !isRetryableRpcError(error)) throw error;
+      const backoff = initialBackoffMs * 2 ** attempt;
+      const jitter = Math.random() * backoff * 0.3;
+      await new Promise((resolve) => setTimeout(resolve, backoff + jitter));
+    }
+  }
+  throw lastError;
+}
+
 @Injectable()
 export class StellarService {
   private readonly logger = new Logger(StellarService.name);
   private readonly server: rpc.Server;
   private readonly contract: Contract;
+  private readonly contractId: string;
   private readonly networkPassphrase: string;
   private readonly platformSigner: Keypair;
-  private readonly buildTxTimeoutSeconds: number;
+  /** Time bound set on every `build*Tx` envelope; it can't land after this many seconds. */
+  readonly buildTxTimeoutSeconds: number;
   private readonly pollTimeoutSeconds: number;
+  private readonly feeBumpMaxFeeStroops: number;
   private readonly rpcCircuitBreaker = new CircuitBreaker();
   private platformAccountCache: {
     account: Awaited<ReturnType<rpc.Server['getAccount']>>;
@@ -83,12 +162,15 @@ export class StellarService {
   constructor(private readonly config: ConfigService) {
     const rpcUrl = this.config.getOrThrow<string>('SOROBAN_RPC_URL');
     const network = this.config.getOrThrow<StellarNetwork>('STELLAR_NETWORK');
+    const rpcTimeoutMs =
+      this.config.get<number>('SOROBAN_RPC_TIMEOUT_MS') ??
+      DEFAULT_RPC_TIMEOUT_MS;
     this.server = new rpc.Server(rpcUrl, {
       allowHttp: rpcUrl.startsWith('http://'),
+      timeoutInSeconds: Math.ceil(rpcTimeoutMs / 1000),
     });
-    this.contract = new Contract(
-      this.config.getOrThrow<string>('TICKETING_CONTRACT_ID'),
-    );
+    this.contractId = this.config.getOrThrow<string>('TICKETING_CONTRACT_ID');
+    this.contract = new Contract(this.contractId);
     this.networkPassphrase = NETWORK_PASSPHRASES[network];
     this.platformSigner = Keypair.fromSecret(
       this.config.getOrThrow<string>('PLATFORM_SIGNER_SECRET'),
@@ -99,10 +181,39 @@ export class StellarService {
     this.pollTimeoutSeconds =
       this.config.get<number>('TRANSACTION_POLL_TIMEOUT_SECONDS') ??
       DEFAULT_POLL_TIMEOUT_SECONDS;
+    this.feeBumpMaxFeeStroops =
+      this.config.get<number>('FEE_BUMP_MAX_FEE_STROOPS') ??
+      DEFAULT_FEE_BUMP_MAX_FEE_STROOPS;
+
+    this.logger.log(
+      `StellarService initialized: networkPassphrase='${this.networkPassphrase}', contractId='${this.contractId}'`,
+    );
+  }
+
+  /** Get cached network passphrase (Issue #151). */
+  getNetworkPassphrase(): string {
+    return this.networkPassphrase;
+  }
+
+  /** Get cached contract ID (Issue #151). */
+  getContractId(): string {
+    return this.contractId;
   }
 
   getCircuitBreakerMetrics() {
     return this.rpcCircuitBreaker.metrics();
+  }
+
+  /**
+   * Poll/check status of a transaction by hash (Issue #149).
+   */
+  async getTransactionStatus(txHash: string): Promise<{ status: string; latestLedger?: number; resultXdr?: string }> {
+    const tx = await this.rpcCall(() => this.server.getTransaction(txHash));
+    return {
+      status: tx.status,
+      latestLedger: tx.latestLedger,
+      resultXdr: tx.resultXdr?.toXDR('base64'),
+    };
   }
 
   /** Read-only simulation — no signature, no ledger write, no fee. */
@@ -118,6 +229,20 @@ export class StellarService {
       nativeToScVal(chainEventId, { type: 'u64' }),
     ]);
     return { eventId: chainEventId, ...this.decodeEvent(result) };
+  }
+
+  /**
+   * Pings the Soroban RPC directly — no retry, no circuit breaker — so the
+   * latency and up/down result reflect the RPC's real state right now (#147).
+   */
+  async pingRpc(): Promise<{ up: boolean; latencyMs: number }> {
+    const start = Date.now();
+    try {
+      await this.server.getLatestLedger();
+      return { up: true, latencyMs: Date.now() - start };
+    } catch {
+      return { up: false, latencyMs: Date.now() - start };
+    }
   }
 
   buildCreateEventTx(params: {
@@ -242,23 +367,158 @@ export class StellarService {
    */
   async submitSignedTransaction(
     signedXdr: string,
+    options: SubmitOptions = {},
   ): Promise<{ result: unknown; txHash: string }> {
-    const tx = TransactionBuilder.fromXDR(signedXdr, this.networkPassphrase);
-    const sendResult = await this.rpcCall(() =>
-      this.server.sendTransaction(tx),
-    );
+    const tx = options.sponsorFee
+      ? this.sponsorFee(signedXdr)
+      : TransactionBuilder.fromXDR(signedXdr, this.networkPassphrase);
+    const txHash = tx.hash().toString('hex');
+
+    let sendResult: rpc.Api.SendTransactionResponse | undefined;
+    let attempts = 0;
+    let delay = INITIAL_SUBMIT_BACKOFF_MS;
+
+    while (attempts <= MAX_SUBMIT_RETRIES) {
+      sendResult = await this.rpcCall(() => this.server.sendTransaction(tx));
+
+      if (sendResult.status === 'TRY_AGAIN_LATER') {
+        attempts++;
+        if (attempts <= MAX_SUBMIT_RETRIES) {
+          this.logger.warn(
+            `Soroban RPC returned TRY_AGAIN_LATER for tx ${txHash} (attempt ${attempts}/${MAX_SUBMIT_RETRIES}); retrying in ${delay}ms`,
+          );
+          await new Promise((resolve) => setTimeout(resolve, delay));
+          delay = Math.min(delay * 2, 4_000);
+          continue;
+        }
+        throw new Error(
+          `Soroban submission failed: TRY_AGAIN_LATER after ${MAX_SUBMIT_RETRIES} retries`,
+        );
+      }
+
+      break;
+    }
+
+    if (!sendResult) {
+      throw new Error('Soroban submission failed: no response from RPC');
+    }
+
     if (sendResult.status === 'ERROR') {
       throw new Error(
         `Soroban submission failed: ${JSON.stringify(sendResult.errorResult)}`,
       );
     }
 
-    const txHash = sendResult.hash;
-    const attempts = Math.ceil(
+    if (sendResult.status === 'DUPLICATE') {
+      this.logger.log(
+        `Transaction ${txHash} already submitted (DUPLICATE); polling existing hash`,
+      );
+    }
+
+    const finalHash = sendResult.hash || txHash;
+    const pollAttempts = Math.ceil(
       (this.pollTimeoutSeconds * 1000) / POLL_INTERVAL_MS,
     );
-    const returnValue = await this.pollTransaction(txHash, attempts);
-    return { result: scValToNative(returnValue), txHash };
+    const returnValue = await this.pollTransaction(finalHash, pollAttempts);
+    return { result: scValToNative(returnValue), txHash: finalHash };
+  }
+
+  /**
+   * Decodes a wallet-signed envelope down to the ticketing-contract call it
+   * carries, so callers can check the signed arguments against the request
+   * before trusting either (#375, #376, #377). Throws unless the envelope is
+   * a single `invokeHostFunction` call on the configured contract — the only
+   * shape `build*Tx` ever produces.
+   */
+  /**
+   * Hex hash of the wallet-signed envelope. Stable for a given envelope, so
+   * it identifies a confirm request across replays (#159).
+   */
+  txHashOf(signedXdr: string): string {
+    return TransactionBuilder.fromXDR(signedXdr, this.networkPassphrase)
+      .hash()
+      .toString('hex');
+  }
+
+  /**
+   * #161 — wraps the attendee's signed envelope in a fee bump the platform
+   * pays for. The declared fee is the spending cap: the network charges only
+   * what the inner transaction actually needs, never more than the cap.
+   */
+  private sponsorFee(signedXdr: string): FeeBumpTransaction {
+    const inner = TransactionBuilder.fromXDR(signedXdr, this.networkPassphrase);
+    if (!(inner instanceof Transaction)) {
+      throw new Error('Envelope is already a fee bump');
+    }
+    if (Number(inner.fee) > this.feeBumpMaxFeeStroops) {
+      throw new Error(
+        `Transaction fee ${inner.fee} exceeds the sponsorship cap of ${this.feeBumpMaxFeeStroops} stroops`,
+      );
+    }
+    const feeBump = TransactionBuilder.buildFeeBumpTransaction(
+      this.platformSigner,
+      this.feeBumpMaxFeeStroops.toString(),
+      inner,
+      this.networkPassphrase,
+    );
+    feeBump.sign(this.platformSigner);
+    return feeBump;
+  }
+
+  /**
+   * One page of ticketing-contract events after `cursor`. Without a cursor,
+   * reads from the latest ledger so a first run does not replay history the
+   * RPC node may have pruned (#163).
+   */
+  async getTicketEvents(
+    cursor: string | undefined,
+    limit: number,
+  ): Promise<ChainTicketEvent[]> {
+    const start = cursor
+      ? { cursor }
+      : {
+          startLedger: (await this.rpcCall(() => this.server.getLatestLedger()))
+            .sequence,
+        };
+    const response = await this.rpcCall(() =>
+      this.server.getEvents({
+        ...start,
+        filters: [
+          { type: 'contract', contractIds: [this.contract.contractId()] },
+        ],
+        limit,
+      }),
+    );
+    return response.events.map((event) => this.decodeTicketEvent(event));
+  }
+
+  decodeSignedInvocation(signedXdr: string): SignedInvocation {
+    const tx = TransactionBuilder.fromXDR(signedXdr, this.networkPassphrase);
+    const inner = tx instanceof Transaction ? tx : tx.innerTransaction;
+    if (inner.operations.length !== 1) {
+      throw new Error(`Expected one operation, got ${inner.operations.length}`);
+    }
+    const [operation] = inner.operations;
+    if (operation.type !== 'invokeHostFunction') {
+      throw new Error(`Expected invokeHostFunction, got ${operation.type}`);
+    }
+    if (
+      operation.func.switch() !==
+      xdr.HostFunctionType.hostFunctionTypeInvokeContract()
+    ) {
+      throw new Error('Expected a contract invocation');
+    }
+    const invocation = operation.func.invokeContract();
+    const contractId = Address.fromScAddress(
+      invocation.contractAddress(),
+    ).toString();
+    if (contractId !== this.contract.contractId()) {
+      throw new Error(`Envelope targets an unexpected contract ${contractId}`);
+    }
+    return {
+      functionName: invocation.functionName().toString(),
+      args: invocation.args().map((arg) => scValToNative(arg) as unknown),
+    };
   }
 
   /**
@@ -311,21 +571,35 @@ export class StellarService {
     fn: string,
     args: xdr.ScVal[],
   ): Promise<string> {
-    const account = await this.rpcCall(() =>
-      this.server.getAccount(sourcePublicKey),
-    );
-    const built = new TransactionBuilder(account, {
-      fee: BASE_FEE,
-      networkPassphrase: this.networkPassphrase,
-    })
-      .addOperation(this.contract.call(fn, ...args))
-      .setTimeout(this.buildTxTimeoutSeconds)
-      .build();
+    try {
+      const account = await this.rpcCall(() =>
+        this.server.getAccount(sourcePublicKey),
+      );
+      const built = new TransactionBuilder(account, {
+        fee: BASE_FEE,
+        networkPassphrase: this.networkPassphrase,
+      })
+        .addOperation(this.contract.call(fn, ...args))
+        .setTimeout(this.buildTxTimeoutSeconds)
+        .build();
 
-    const prepared = await this.rpcCall(() =>
-      this.server.prepareTransaction(built),
-    );
-    return prepared.toXDR();
+      // Issue #153: Simulate transaction before returning build payload
+      const sim = await this.rpcCall(() => this.server.simulateTransaction(built));
+      if (rpc.Api.isSimulationError(sim)) {
+        throw mapSorobanErrorToApiException(sim.error);
+      }
+
+      const prepared = await this.rpcCall(() =>
+        this.server.prepareTransaction(built),
+      );
+      return prepared.toXDR();
+    } catch (err) {
+      if (err && typeof err === 'object' && 'getStatus' in err) {
+        throw err;
+      }
+      const msg = err instanceof Error ? err.message : String(err);
+      throw mapSorobanErrorToApiException(msg);
+    }
   }
 
   private async pollTransaction(
@@ -350,8 +624,28 @@ export class StellarService {
     throw new Error(`Timed out waiting for transaction ${hash} to land`);
   }
 
+  private decodeTicketEvent(event: rpc.Api.EventResponse): ChainTicketEvent {
+    const name = String(scValToNative(event.topic[0]));
+    // Payload shape is assumed: a bare u64 ticket id, or a map with a
+    // `ticket_id` field. Confirm against the contract's emitted events.
+    const payload = scValToNative(event.value) as unknown;
+    const raw =
+      typeof payload === 'bigint'
+        ? payload
+        : (payload as { ticket_id?: unknown } | null)?.ticket_id;
+    return {
+      id: event.id,
+      pagingToken: event.pagingToken,
+      ledger: event.ledger,
+      name,
+      chainTicketId: typeof raw === 'bigint' ? raw : null,
+    };
+  }
+
   private rpcCall<T>(operation: () => Promise<T>): Promise<T> {
-    return this.rpcCircuitBreaker.execute(operation);
+    return this.rpcCircuitBreaker.execute(() =>
+      withRetry(operation, MAX_RPC_RETRIES, INITIAL_RPC_BACKOFF_MS),
+    );
   }
 
   private decodeTicket(scVal: xdr.ScVal): OnChainTicket {

@@ -1,4 +1,8 @@
-import { INestApplication, NotFoundException } from '@nestjs/common';
+import {
+  ForbiddenException,
+  INestApplication,
+  NotFoundException,
+} from '@nestjs/common';
 import request from 'supertest';
 import {
   AUTH,
@@ -17,6 +21,7 @@ describe('OrganizationsController', () => {
     create: jest.fn(),
     findMine: jest.fn(),
     findOne: jest.fn(),
+    update: jest.fn(),
     softDelete: jest.fn(),
     restore: jest.fn(),
   };
@@ -41,6 +46,7 @@ describe('OrganizationsController', () => {
     ['post', '/organizations'],
     ['get', '/organizations/mine'],
     ['get', '/organizations/org-1'],
+    ['patch', '/organizations/org-1'],
     ['delete', '/organizations/org-1'],
     ['post', '/organizations/org-1/restore'],
   ] as const)('rejects unauthenticated %s %s', async (method, url) => {
@@ -101,6 +107,36 @@ describe('OrganizationsController', () => {
     expect((res.body as { message: string }).message).toBe(
       'Organization not found',
     );
+  });
+
+  it('PATCH /:id updates as the current user', async () => {
+    service.update.mockResolvedValue({ id: 'org-1', name: 'Renamed Org' });
+    await request(server(app))
+      .patch('/organizations/org-1')
+      .set(AUTH)
+      .send({ name: 'Renamed Org' })
+      .expect(200);
+    expect(service.update).toHaveBeenCalledWith(TEST_USER.userId, 'org-1', {
+      name: 'Renamed Org',
+    });
+  });
+
+  it('PATCH /:id rejects a slug change before reaching the service', async () => {
+    await request(server(app))
+      .patch('/organizations/org-1')
+      .set(AUTH)
+      .send({ slug: 'new-slug' })
+      .expect(400);
+    expect(service.update).not.toHaveBeenCalled();
+  });
+
+  it('PATCH /:id propagates forbidden for non owner/admin members', async () => {
+    service.update.mockRejectedValue(new ForbiddenException());
+    await request(server(app))
+      .patch('/organizations/org-1')
+      .set(AUTH)
+      .send({ name: 'Renamed Org' })
+      .expect(403);
   });
 
   it('DELETE /:id soft-deletes as the current user', async () => {

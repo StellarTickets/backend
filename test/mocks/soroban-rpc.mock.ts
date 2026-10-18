@@ -59,6 +59,24 @@ export function sendRejected(hash = TX_HASH) {
   };
 }
 
+export function sendDuplicate(hash = TX_HASH) {
+  return {
+    status: 'DUPLICATE',
+    hash,
+    latestLedger: 100,
+    latestLedgerCloseTime: 1_700_000_000,
+  };
+}
+
+export function sendTryAgainLater(hash = TX_HASH) {
+  return {
+    status: 'TRY_AGAIN_LATER',
+    hash,
+    latestLedger: 100,
+    latestLedgerCloseTime: 1_700_000_000,
+  };
+}
+
 export function txSuccess(returnValue?: xdr.ScVal) {
   return { status: rpc.Api.GetTransactionStatus.SUCCESS, returnValue };
 }

@@ -4,6 +4,7 @@ import {
   Delete,
   Get,
   Param,
+  Patch,
   Post,
   UseGuards,
 } from '@nestjs/common';
@@ -12,6 +13,7 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import type { CurrentUserPayload } from '../auth/decorators/current-user.decorator';
 import { OrganizationsService } from './organizations.service';
 import { CreateOrganizationDto } from './dto/create-organization.dto';
+import { UpdateOrganizationDto } from './dto/update-organization.dto';
 
 @Controller('organizations')
 @UseGuards(JwtAuthGuard)
@@ -34,6 +36,15 @@ export class OrganizationsController {
   @Get(':id')
   findOne(@Param('id') id: string) {
     return this.organizationsService.findOne(id);
+  }
+
+  @Patch(':id')
+  update(
+    @CurrentUser() user: CurrentUserPayload,
+    @Param('id') id: string,
+    @Body() dto: UpdateOrganizationDto,
+  ) {
+    return this.organizationsService.update(user.userId, id, dto);
   }
 
   @Delete(':id')

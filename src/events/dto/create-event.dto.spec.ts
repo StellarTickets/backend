@@ -103,6 +103,54 @@ describe('CreateEventDto', () => {
     expect(errors.some((e) => e.property === 'ticketTypes')).toBe(true);
   });
 
+  describe('royaltyBps and maxResaleMultiplierBps (#97)', () => {
+    it('accepts royaltyBps at the minimum boundary (0)', async () => {
+      const errors = await validate(build({ royaltyBps: 0 }));
+      expect(errors).toHaveLength(0);
+    });
+
+    it('accepts royaltyBps at the maximum boundary (2000 bps = 20%)', async () => {
+      const errors = await validate(build({ royaltyBps: 2_000 }));
+      expect(errors).toHaveLength(0);
+    });
+
+    it('rejects a negative royaltyBps', async () => {
+      const errors = await validate(build({ royaltyBps: -1 }));
+      expect(errors.some((e) => e.property === 'royaltyBps')).toBe(true);
+    });
+
+    it('accepts maxResaleMultiplierBps at the minimum boundary (10000 bps = 100%)', async () => {
+      const errors = await validate(build({ maxResaleMultiplierBps: 10_000 }));
+      expect(errors).toHaveLength(0);
+    });
+
+    it('accepts maxResaleMultiplierBps at the maximum boundary (50000 bps = 500%)', async () => {
+      const errors = await validate(build({ maxResaleMultiplierBps: 50_000 }));
+      expect(errors).toHaveLength(0);
+    });
+
+    it('rejects maxResaleMultiplierBps above 50000 bps', async () => {
+      const errors = await validate(build({ maxResaleMultiplierBps: 50_001 }));
+      expect(errors.some((e) => e.property === 'maxResaleMultiplierBps')).toBe(
+        true,
+      );
+    });
+
+    it('rejects a non-integer royaltyBps', async () => {
+      const errors = await validate(build({ royaltyBps: 1.5 }));
+      expect(errors.some((e) => e.property === 'royaltyBps')).toBe(true);
+    });
+
+    it('rejects a non-integer maxResaleMultiplierBps', async () => {
+      const errors = await validate(
+        build({ maxResaleMultiplierBps: 10_000.5 }),
+      );
+      expect(errors.some((e) => e.property === 'maxResaleMultiplierBps')).toBe(
+        true,
+      );
+    });
+  });
+
   describe('max length (#400)', () => {
     it('rejects a name over 256 characters', async () => {
       const errors = await validate(build({ name: 'a'.repeat(257) }));

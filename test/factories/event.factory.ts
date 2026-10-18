@@ -15,6 +15,7 @@ export function createEvent(overrides: Partial<Event> = {}): Event {
     startsAt: new Date('2026-12-01T20:00:00.000Z'),
     endsAt: new Date('2026-12-01T23:00:00.000Z'),
     chainEventId: null,
+    chainEventIdReservedAt: null,
     publishedTxHash: null,
     maxResaleMultiplierBps: 11_000,
     royaltyBps: 500,

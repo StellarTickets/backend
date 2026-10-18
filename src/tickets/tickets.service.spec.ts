@@ -15,12 +15,14 @@ import {
   ListingInactiveError,
   TicketTypeSoldOutError,
 } from '../common/errors/domain.error';
+import { UNASSIGNED_SEAT } from '../common/constants/seat.constant';
 import { Prisma } from '@prisma/client';
 import { TicketsService } from './tickets.service';
 import type { PrismaService } from '../prisma/prisma.service';
 import type { OrganizationsService } from '../organizations/organizations.service';
 import type { StellarService } from '../stellar/stellar.service';
 import type { OfflineTokenService } from './offline-token.service';
+import type { QrTokenService } from './qr-token.service';
 import type { ConfigService } from '@nestjs/config';
 import {
   createEvent,
@@ -44,6 +46,7 @@ function buildTicketType(overrides: Partial<Record<string, unknown>> = {}) {
         id: 'event-1',
         organizationId: 'org-1',
         chainEventId: 42n,
+        status: 'PUBLISHED',
       }),
       organization: createOrganization({ stellarAccount: 'GORGANIZER' }),
     },
@@ -78,12 +81,14 @@ describe('TicketsService', () => {
       create: jest.Mock;
       findMany: jest.Mock;
     };
+    processedTx: { findUnique: jest.Mock; create: jest.Mock };
     user: { findUnique: jest.Mock };
     $transaction: jest.Mock;
   };
   let organizations: { assertMember: jest.Mock };
   let stellar: Record<string, jest.Mock>;
   let offlineTokens: { sign: jest.Mock; getPublicKeys: jest.Mock };
+  let qrTokens: { issue: jest.Mock; verify: jest.Mock };
   let config: { get: jest.Mock };
 
   beforeEach(() => {
@@ -114,6 +119,10 @@ describe('TicketsService', () => {
         create: jest.fn(),
         findMany: jest.fn(),
       },
+      processedTx: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({}),
+      },
       user: { findUnique: jest.fn() },
       $transaction: jest.fn((cb: (tx: unknown) => unknown) =>
         Array.isArray(cb) ? Promise.all(cb) : cb(prisma),
@@ -133,6 +142,8 @@ describe('TicketsService', () => {
         .fn()
         .mockResolvedValue({ result: 7n, txHash: '0xabc' }),
       verifyTicket: jest.fn(),
+      decodeSignedInvocation: jest.fn(),
+      txHashOf: jest.fn().mockReturnValue('hash-1'),
     };
     offlineTokens = {
       sign: jest.fn().mockReturnValue({
@@ -148,6 +159,7 @@ describe('TicketsService', () => {
       }),
       getPublicKeys: jest.fn().mockReturnValue({ 'test-key': 'pem' }),
     };
+    qrTokens = { issue: jest.fn(), verify: jest.fn() };
     config = { get: jest.fn().mockReturnValue(5) };
 
     service = new TicketsService(
@@ -157,8 +169,18 @@ describe('TicketsService', () => {
       undefined,
       offlineTokens as unknown as OfflineTokenService,
       config as unknown as ConfigService,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      qrTokens as unknown as QrTokenService,
     );
   });
+
+  /** Makes the signed envelope decode to `functionName(...args)` (#375-#377). */
+  function mockSignedCall(functionName: string, args: unknown[]) {
+    stellar.decodeSignedInvocation.mockReturnValue({ functionName, args });
+  }
 
   describe('buildIssueTx', () => {
     it('rejects once a ticket type is sold out', async () => {
@@ -172,10 +194,30 @@ describe('TicketsService', () => {
       expect(stellar.buildIssueTicketTx).not.toHaveBeenCalled();
     });
 
-    it('rejects issuing against an unpublished event', async () => {
+    it('rejects issuing against an unpublished event in DRAFT status (400) (#383)', async () => {
       prisma.ticketType.findUnique.mockResolvedValue(
         buildTicketType({
-          event: { ...buildTicketType().event, chainEventId: null },
+          event: {
+            ...buildTicketType().event,
+            status: 'DRAFT',
+            chainEventId: null,
+          },
+        }),
+      );
+
+      await expect(
+        service.buildIssueTx('organizer-1', 'tt-1', 'buyer-1', 'GBUYER'),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('rejects issuing against a CANCELLED event even if it has a chainEventId (400) (#383)', async () => {
+      prisma.ticketType.findUnique.mockResolvedValue(
+        buildTicketType({
+          event: {
+            ...buildTicketType().event,
+            status: 'CANCELLED',
+            chainEventId: 42n,
+          },
         }),
       );
 
@@ -225,7 +267,177 @@ describe('TicketsService', () => {
     });
   });
 
+  describe('buildIssueBatch (#133)', () => {
+    beforeEach(() => {
+      prisma.ticketType.findUnique.mockResolvedValue(buildTicketType());
+    });
+
+    it('rejects a batch that exceeds the configured maximum size', async () => {
+      config.get.mockReturnValue(2);
+      const recipients = [
+        { toUserId: 'u1', toPublicKey: 'GPUBKEY1' },
+        { toUserId: 'u2', toPublicKey: 'GPUBKEY2' },
+        { toUserId: 'u3', toPublicKey: 'GPUBKEY3' },
+      ];
+
+      await expect(
+        service.buildIssueBatch('organizer-1', 'tt-1', recipients),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('returns one unsignedXdr per valid recipient', async () => {
+      config.get.mockReturnValue(50);
+      prisma.user.findUnique
+        .mockResolvedValueOnce(
+          createUser({ id: 'u1', stellarPublicKey: 'GPUBKEY1' }),
+        )
+        .mockResolvedValueOnce(
+          createUser({ id: 'u2', stellarPublicKey: 'GPUBKEY2' }),
+        );
+
+      const result = await service.buildIssueBatch('organizer-1', 'tt-1', [
+        { toUserId: 'u1', toPublicKey: 'GPUBKEY1', seat: 'A1' },
+        { toUserId: 'u2', toPublicKey: 'GPUBKEY2' },
+      ]);
+
+      expect(result.total).toBe(2);
+      expect(result.succeeded).toBe(2);
+      expect(result.failed).toBe(0);
+      expect(stellar.buildIssueTicketTx).toHaveBeenCalledTimes(2);
+    });
+
+    it('collects per-recipient errors without aborting the batch', async () => {
+      config.get.mockReturnValue(50);
+      // u1 not found, u2 succeeds
+      prisma.user.findUnique
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(
+          createUser({ id: 'u2', stellarPublicKey: 'GPUBKEY2' }),
+        );
+
+      const result = await service.buildIssueBatch('organizer-1', 'tt-1', [
+        { toUserId: 'u1', toPublicKey: 'GPUBKEY1' },
+        { toUserId: 'u2', toPublicKey: 'GPUBKEY2' },
+      ]);
+
+      expect(result.total).toBe(2);
+      expect(result.succeeded).toBe(1);
+      expect(result.failed).toBe(1);
+      const errorResult = result.results.find((r) => r.toUserId === 'u1');
+      expect(errorResult?.status).toBe('error');
+    });
+
+    it('rejects a recipient whose provided public key does not match their stored wallet', async () => {
+      config.get.mockReturnValue(50);
+      prisma.user.findUnique.mockResolvedValue(
+        createUser({ id: 'u1', stellarPublicKey: 'GACTUALKEY' }),
+      );
+
+      const result = await service.buildIssueBatch('organizer-1', 'tt-1', [
+        { toUserId: 'u1', toPublicKey: 'GDIFFERENTKEY' },
+      ]);
+
+      expect(result.failed).toBe(1);
+      expect(result.results[0]?.status).toBe('error');
+      expect(stellar.buildIssueTicketTx).not.toHaveBeenCalled();
+    });
+
+    it('rejects a batch for an unpublished event', async () => {
+      prisma.ticketType.findUnique.mockResolvedValue(
+        buildTicketType({
+          event: {
+            ...buildTicketType().event,
+            status: 'DRAFT',
+            chainEventId: null,
+          },
+        }),
+      );
+
+      await expect(
+        service.buildIssueBatch('organizer-1', 'tt-1', [
+          { toUserId: 'u1', toPublicKey: 'GPUBKEY1' },
+        ]),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+  });
+
+  describe('buildPurchaseTx', () => {
+    it('rejects purchase against a DRAFT event (400) (#383)', async () => {
+      prisma.ticketType.findUnique.mockResolvedValue(
+        buildTicketType({
+          event: {
+            ...buildTicketType().event,
+            status: 'DRAFT',
+            chainEventId: null,
+          },
+        }),
+      );
+      prisma.user.findUnique.mockResolvedValue(
+        createUser({ id: 'buyer-1', stellarPublicKey: 'GBUYER' }),
+      );
+
+      await expect(
+        service.buildPurchaseTx('buyer-1', 'tt-1'),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('rejects purchase against a CANCELLED event even if it has a chainEventId (400) (#383)', async () => {
+      prisma.ticketType.findUnique.mockResolvedValue(
+        buildTicketType({
+          event: {
+            ...buildTicketType().event,
+            status: 'CANCELLED',
+            chainEventId: 42n,
+          },
+        }),
+      );
+      prisma.user.findUnique.mockResolvedValue(
+        createUser({ id: 'buyer-1', stellarPublicKey: 'GBUYER' }),
+      );
+
+      await expect(
+        service.buildPurchaseTx('buyer-1', 'tt-1'),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('builds purchase_primary transaction against a PUBLISHED event (#383)', async () => {
+      prisma.ticketType.findUnique.mockResolvedValue(
+        buildTicketType({
+          event: {
+            ...buildTicketType().event,
+            status: 'PUBLISHED',
+            chainEventId: 42n,
+          },
+        }),
+      );
+      prisma.user.findUnique.mockResolvedValue(
+        createUser({ id: 'buyer-1', stellarPublicKey: 'GBUYER' }),
+      );
+
+      const result = await service.buildPurchaseTx('buyer-1', 'tt-1');
+      expect(result).toEqual({ unsignedXdr: 'unsigned-xdr' });
+      expect(stellar.buildPurchasePrimaryTx).toHaveBeenCalledWith({
+        buyerPublicKey: 'GBUYER',
+        chainEventId: 42n,
+        tier: 'GA',
+        seat: UNASSIGNED_SEAT,
+        price: 1_000n,
+      });
+    });
+  });
+
   describe('confirmIssue', () => {
+    const issueArgs = (seat = 'unassigned', to = 'GBUYER') => [
+      'GORGANIZER',
+      42n,
+      to,
+      'GA',
+      seat,
+      1_000n,
+    ];
+
+    beforeEach(() => mockSignedCall('issue_ticket', issueArgs('A1')));
+
     it('creates the ticket row and increments quantityIssued using the on-chain ticket id', async () => {
       prisma.ticketType.findUnique.mockResolvedValue(buildTicketType());
       prisma.ticket.create.mockImplementation(({ data }) =>
@@ -260,6 +472,7 @@ describe('TicketsService', () => {
     });
 
     it('locks the TicketType row and re-checks capacity under the lock (#217)', async () => {
+      mockSignedCall('issue_ticket', issueArgs());
       prisma.ticketType.findUnique.mockResolvedValue(buildTicketType());
       prisma.user.findUnique.mockResolvedValue(
         createUser({ id: 'buyer-1', stellarPublicKey: 'GBUYER' }),
@@ -288,6 +501,7 @@ describe('TicketsService', () => {
     });
 
     it('uses the locked row as the capacity authority, not the stale read (#217)', async () => {
+      mockSignedCall('issue_ticket', issueArgs());
       prisma.ticketType.findUnique.mockResolvedValue(buildTicketType());
       prisma.user.findUnique.mockResolvedValue(
         createUser({ id: 'buyer-1', stellarPublicKey: 'GBUYER' }),
@@ -331,6 +545,149 @@ describe('TicketsService', () => {
         ),
       ).rejects.toBeInstanceOf(ConflictException);
       expect(stellar.submitSignedTransaction).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['seat', issueArgs('VIP')],
+      ['recipient', issueArgs('A1', 'GSOMEONEELSE')],
+      ['tier', ['GORGANIZER', 42n, 'GBUYER', 'VIP', 'A1', 1_000n]],
+      ['event', ['GORGANIZER', 99n, 'GBUYER', 'GA', 'A1', 1_000n]],
+    ])(
+      'rejects a signed issuance whose %s differs from the request (#377)',
+      async (label, args) => {
+        mockSignedCall('issue_ticket', args);
+        prisma.ticketType.findUnique.mockResolvedValue(buildTicketType());
+        prisma.user.findUnique.mockResolvedValue(
+          createUser({ id: 'buyer-1', stellarPublicKey: 'GBUYER' }),
+        );
+
+        await expect(
+          service.confirmIssue(
+            'organizer-1',
+            'tt-1',
+            'buyer-1',
+            'GBUYER',
+            'A1',
+            'signed-xdr',
+          ),
+        ).rejects.toThrow(
+          new BadRequestException(
+            `Signed transaction ${label} does not match the request`,
+          ),
+        );
+        expect(stellar.submitSignedTransaction).not.toHaveBeenCalled();
+        expect(prisma.ticket.create).not.toHaveBeenCalled();
+      },
+    );
+
+    it('rejects a signed envelope that calls a different contract function (#377)', async () => {
+      mockSignedCall('purchase_primary', ['GBUYER', 42n, 'GA', 'A1', 1_000n]);
+      prisma.ticketType.findUnique.mockResolvedValue(buildTicketType());
+      prisma.user.findUnique.mockResolvedValue(
+        createUser({ id: 'buyer-1', stellarPublicKey: 'GBUYER' }),
+      );
+
+      await expect(
+        service.confirmIssue(
+          'organizer-1',
+          'tt-1',
+          'buyer-1',
+          'GBUYER',
+          'A1',
+          'signed-xdr',
+        ),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(stellar.submitSignedTransaction).not.toHaveBeenCalled();
+    });
+
+    it('rejects an envelope that cannot be decoded with a 400 (#377)', async () => {
+      stellar.decodeSignedInvocation.mockImplementation(() => {
+        throw new Error('Expected one operation, got 2');
+      });
+      prisma.ticketType.findUnique.mockResolvedValue(buildTicketType());
+      prisma.user.findUnique.mockResolvedValue(
+        createUser({ id: 'buyer-1', stellarPublicKey: 'GBUYER' }),
+      );
+
+      await expect(
+        service.confirmIssue(
+          'organizer-1',
+          'tt-1',
+          'buyer-1',
+          'GBUYER',
+          'A1',
+          'signed-xdr',
+        ),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(stellar.submitSignedTransaction).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('confirmPurchase', () => {
+    beforeEach(() => {
+      prisma.ticketType.findUnique.mockResolvedValue(buildTicketType());
+      prisma.user.findUnique.mockResolvedValue(
+        createUser({ id: 'buyer-1', stellarPublicKey: 'GBUYER' }),
+      );
+      prisma.ticket.create.mockImplementation(({ data }) =>
+        Promise.resolve({ id: 'ticket-1', ...data }),
+      );
+    });
+
+    it('records the ticket the signed purchase mints', async () => {
+      mockSignedCall('purchase_primary', ['GBUYER', 42n, 'GA', 'A1', 1_000n]);
+
+      const ticket = await service.confirmPurchase(
+        'buyer-1',
+        'tt-1',
+        'A1',
+        'signed-xdr',
+      );
+
+      expect(stellar.submitSignedTransaction).toHaveBeenCalledWith(
+        'signed-xdr',
+        { sponsorFee: false },
+      );
+      expect(ticket).toMatchObject({
+        chainTicketId: 7n,
+        ownerId: 'buyer-1',
+        seat: 'A1',
+      });
+    });
+
+    it.each([
+      ['seat', ['GBUYER', 42n, 'GA', 'VIP', 1_000n]],
+      ['buyer', ['GSOMEONEELSE', 42n, 'GA', 'A1', 1_000n]],
+      ['tier', ['GBUYER', 42n, 'VIP', 'A1', 1_000n]],
+    ])(
+      'rejects a signed purchase whose %s differs from the request (#377)',
+      async (label, args) => {
+        mockSignedCall('purchase_primary', args);
+
+        await expect(
+          service.confirmPurchase('buyer-1', 'tt-1', 'A1', 'signed-xdr'),
+        ).rejects.toThrow(
+          new BadRequestException(
+            `Signed transaction ${label} does not match the request`,
+          ),
+        );
+        expect(stellar.submitSignedTransaction).not.toHaveBeenCalled();
+        expect(prisma.ticket.create).not.toHaveBeenCalled();
+      },
+    );
+
+    it('treats a missing seat as the unassigned sentinel when comparing (#377)', async () => {
+      mockSignedCall('purchase_primary', [
+        'GBUYER',
+        42n,
+        'GA',
+        'unassigned',
+        1_000n,
+      ]);
+
+      await expect(
+        service.confirmPurchase('buyer-1', 'tt-1', undefined, 'signed-xdr'),
+      ).resolves.toMatchObject({ seat: 'unassigned' });
     });
   });
 
@@ -391,6 +748,113 @@ describe('TicketsService', () => {
         toPublicKey: 'GFRIEND',
       });
     });
+
+    describe('confirmTransfer', () => {
+      beforeEach(() => {
+        prisma.ticket.findUnique.mockResolvedValue({
+          ...createTicket({
+            id: 'ticket-1',
+            ownerId: 'owner-1',
+            chainTicketId: 7n,
+          }),
+          event: {
+            organizationId: 'org-1',
+            organization: createOrganization({ stellarAccount: 'GORG' }),
+          },
+        });
+        prisma.user.findUnique.mockResolvedValue(
+          createUser({ id: 'friend-1', stellarPublicKey: 'GFRIEND' }),
+        );
+        prisma.ticket.update.mockImplementation(({ data }) =>
+          Promise.resolve({ id: 'ticket-1', ...data }),
+        );
+        stellar.verifyTicket.mockResolvedValue({ owner: 'GFRIEND' });
+      });
+
+      it('records the new owner once the chain confirms it', async () => {
+        mockSignedCall('transfer_ticket', ['GOWNER', 7n, 'GFRIEND']);
+
+        const ticket = await service.confirmTransfer(
+          'owner-1',
+          'ticket-1',
+          'friend-1',
+          'GFRIEND',
+          'signed-xdr',
+        );
+
+        expect(stellar.verifyTicket).toHaveBeenCalledWith(7n);
+        expect(ticket).toMatchObject({ ownerId: 'friend-1', status: 'VALID' });
+      });
+
+      it('returns 409 and leaves ownerId unchanged when the signed recipient differs from toUserId (#375)', async () => {
+        mockSignedCall('transfer_ticket', ['GOWNER', 7n, 'GWALLETA']);
+
+        await expect(
+          service.confirmTransfer(
+            'owner-1',
+            'ticket-1',
+            'friend-1',
+            'GFRIEND',
+            'signed-xdr',
+          ),
+        ).rejects.toBeInstanceOf(ConflictException);
+        expect(stellar.submitSignedTransaction).not.toHaveBeenCalled();
+        expect(prisma.ticket.update).not.toHaveBeenCalled();
+      });
+
+      it('returns 409 and leaves ownerId unchanged when the on-chain owner is not toUserId (#375)', async () => {
+        mockSignedCall('transfer_ticket', ['GOWNER', 7n, 'GFRIEND']);
+        stellar.verifyTicket.mockResolvedValue({ owner: 'GWALLETA' });
+
+        await expect(
+          service.confirmTransfer(
+            'owner-1',
+            'ticket-1',
+            'friend-1',
+            'GFRIEND',
+            'signed-xdr',
+          ),
+        ).rejects.toBeInstanceOf(ConflictException);
+        expect(prisma.ticket.update).not.toHaveBeenCalled();
+      });
+
+      it('rejects a signed transfer of a different ticket (#375)', async () => {
+        mockSignedCall('transfer_ticket', ['GOWNER', 8n, 'GFRIEND']);
+
+        await expect(
+          service.confirmTransfer(
+            'owner-1',
+            'ticket-1',
+            'friend-1',
+            'GFRIEND',
+            'signed-xdr',
+          ),
+        ).rejects.toBeInstanceOf(ConflictException);
+        expect(stellar.submitSignedTransaction).not.toHaveBeenCalled();
+      });
+
+      it('cancels the ACTIVE resale listing of a transferred ticket in the same transaction (#378)', async () => {
+        mockSignedCall('transfer_ticket', ['GOWNER', 7n, 'GFRIEND']);
+
+        await service.confirmTransfer(
+          'owner-1',
+          'ticket-1',
+          'friend-1',
+          'GFRIEND',
+          'signed-xdr',
+        );
+
+        expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+        expect(prisma.resaleListing.updateMany).toHaveBeenCalledWith({
+          where: { ticketId: 'ticket-1', status: 'ACTIVE' },
+          data: { status: 'CANCELLED' },
+        });
+        expect(prisma.ticket.update).toHaveBeenCalledWith({
+          where: { id: 'ticket-1' },
+          data: { ownerId: 'friend-1', status: 'VALID' },
+        });
+      });
+    });
   });
 
   describe('verify', () => {
@@ -428,6 +892,65 @@ describe('TicketsService', () => {
     });
   });
 
+  describe('verify — rotating QR tokens (#129)', () => {
+    const token = 'v1.ticket-1.1790592000.signature';
+
+    it('looks the ticket up by the id inside a valid token', async () => {
+      qrTokens.verify.mockReturnValue('ticket-1');
+      prisma.ticket.findUnique.mockResolvedValue({
+        id: 'ticket-1',
+        chainTicketId: 7n,
+        status: 'VALID',
+        seat: 'A1',
+        event: { organizationId: 'org-1', name: 'Radiohead Live' },
+        owner: { name: 'Ada Lovelace' },
+        ticketType: { name: 'GA' },
+      });
+      stellar.verifyTicket.mockResolvedValue({
+        owner: 'GBUYER',
+        status: 'Valid',
+      });
+
+      const result = await service.verify('staff-1', token);
+
+      expect(qrTokens.verify).toHaveBeenCalledWith(token);
+      expect(prisma.ticket.findUnique).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'ticket-1' } }),
+      );
+      expect(organizations.assertMember).toHaveBeenCalledWith(
+        'org-1',
+        'staff-1',
+      );
+      expect(result.ticketId).toBe('ticket-1');
+    });
+
+    it('rejects an expired token without touching the database', async () => {
+      qrTokens.verify.mockImplementation(() => {
+        throw new BadRequestException('QR code has expired');
+      });
+
+      await expect(service.verify('staff-1', token)).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+      expect(prisma.ticket.findUnique).not.toHaveBeenCalled();
+    });
+
+    it('still resolves a static qrSecret by the secret, never as a token', async () => {
+      prisma.ticket.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.verify('staff-1', 'c1d2e3f4-a5b6-4c7d-8e9f-0a1b2c3d4e5f'),
+      ).rejects.toBeInstanceOf(NotFoundException);
+
+      expect(qrTokens.verify).not.toHaveBeenCalled();
+      expect(prisma.ticket.findUnique).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { qrSecret: 'c1d2e3f4-a5b6-4c7d-8e9f-0a1b2c3d4e5f' },
+        }),
+      );
+    });
+  });
+
   describe('getOfflineToken', () => {
     it('signs a payload built from the ticket for an authorized staff member', async () => {
       prisma.ticket.findUnique.mockResolvedValue({
@@ -435,7 +958,8 @@ describe('TicketsService', () => {
         eventId: 'event-1',
         chainTicketId: 7n,
         status: 'VALID',
-        event: { organizationId: 'org-1', organization: {} },
+        chainTicketId: 7n,
+        event: { organizationId: 'org-1', organization: { stellarAccount: 'GORG' } },
       });
 
       const token = await service.getOfflineToken('staff-1', 'ticket-1');
@@ -470,7 +994,8 @@ describe('TicketsService', () => {
         eventId: 'event-1',
         chainTicketId: 7n,
         status: 'VALID',
-        event: { organizationId: 'org-1', organization: {} },
+        chainTicketId: 7n,
+        event: { organizationId: 'org-1', organization: { stellarAccount: 'GORG' } },
       });
       organizations.assertMember.mockRejectedValueOnce(
         new ForbiddenException('You are not a member of this organization'),
@@ -522,6 +1047,8 @@ describe('TicketsService', () => {
         id: 'listing-1',
         status: 'ACTIVE',
       });
+      mockSignedCall('list_for_resale', ['GOWNER', 7n, 1200n]);
+      stellar.verifyTicket.mockResolvedValue({ resalePrice: 1200n });
 
       await service.confirmListForResale(
         'owner-1',
@@ -592,6 +1119,8 @@ describe('TicketsService', () => {
         },
         ticketType: { price: 1_000n },
       });
+      mockSignedCall('list_for_resale', ['GOWNER', 7n, 1200n]);
+      stellar.verifyTicket.mockResolvedValue({ resalePrice: 1200n });
       // Both transactions race past the pre-check; the DB partial unique
       // index rejects the loser with a P2002 on the active-listing index.
       prisma.$transaction.mockRejectedValueOnce(
@@ -610,6 +1139,69 @@ describe('TicketsService', () => {
           'signed-xdr',
         ),
       ).rejects.toBeInstanceOf(ConflictException);
+    });
+
+    it('rejects a body price that differs from the signed listing price (#376)', async () => {
+      prisma.ticket.findUnique.mockResolvedValue({
+        id: 'ticket-1',
+        ownerId: 'owner-1',
+        chainTicketId: 7n,
+        event: {
+          organizationId: 'org-1',
+          organization: { stellarAccount: 'GORG' },
+          maxResaleMultiplierBps: 20_000,
+        },
+        ticketType: { price: 1_000n },
+      });
+      // Signed to list at 1 500, but the body claims 1 200.
+      mockSignedCall('list_for_resale', ['GOWNER', 7n, 1500n]);
+
+      await expect(
+        service.confirmListForResale(
+          'owner-1',
+          'ticket-1',
+          '1200',
+          'signed-xdr',
+        ),
+      ).rejects.toThrow(
+        new BadRequestException(
+          'Signed transaction price does not match the request',
+        ),
+      );
+      expect(stellar.submitSignedTransaction).not.toHaveBeenCalled();
+      expect(prisma.resaleListing.create).not.toHaveBeenCalled();
+    });
+
+    it('stores the on-chain resale price, not the body price (#376)', async () => {
+      prisma.ticket.findUnique.mockResolvedValue({
+        id: 'ticket-1',
+        ownerId: 'owner-1',
+        chainTicketId: 7n,
+        event: {
+          organizationId: 'org-1',
+          organization: { stellarAccount: 'GORG' },
+          maxResaleMultiplierBps: 20_000,
+        },
+        ticketType: { price: 1_000n },
+      });
+      mockSignedCall('list_for_resale', ['GOWNER', 7n, 1200n]);
+      stellar.verifyTicket.mockResolvedValue({ resalePrice: 1150n });
+
+      await service.confirmListForResale(
+        'owner-1',
+        'ticket-1',
+        '1200',
+        'signed-xdr',
+      );
+
+      expect(stellar.verifyTicket).toHaveBeenCalledWith(7n);
+      const expectedData: unknown = expect.objectContaining({
+        price: 1150n,
+        priceHistory: { create: { price: 1150n } },
+      });
+      expect(prisma.resaleListing.create).toHaveBeenCalledWith({
+        data: expectedData,
+      });
     });
 
     it('enforces soft limit on active resale listings per user (409 Conflict)', async () => {
@@ -645,6 +1237,8 @@ describe('TicketsService', () => {
         id: 'listing-1',
         status: 'ACTIVE',
       });
+      mockSignedCall('list_for_resale', ['GOWNER', 7n, 1200n]);
+      stellar.verifyTicket.mockResolvedValue({ resalePrice: 1200n });
 
       const expiryStr = '2026-12-31T23:59:59.000Z';
       await service.confirmListForResale(
@@ -939,6 +1533,129 @@ describe('TicketsService', () => {
     });
   });
 
+  describe('findOne (#121)', () => {
+    const ticket = {
+      id: 'ticket-1',
+      ownerId: 'owner-1',
+      qrSecret: 'qr-secret-1',
+      event: { id: 'event-1', organizationId: 'org-1', organization: {} },
+      ticketType: { id: 'tt-1' },
+    };
+
+    it('returns the ticket, including its qrSecret, to its owner', async () => {
+      prisma.ticket.findUnique.mockResolvedValue(ticket);
+
+      const result = await service.findOne('owner-1', 'ticket-1');
+
+      expect(prisma.ticket.findUnique).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'ticket-1' } }),
+      );
+      expect(organizations.assertMember).not.toHaveBeenCalled();
+      expect(result).toBe(ticket);
+    });
+
+    it('returns the ticket without its qrSecret to staff of the owning organization', async () => {
+      prisma.ticket.findUnique.mockResolvedValue(ticket);
+
+      const result = await service.findOne('staff-1', 'ticket-1');
+
+      expect(organizations.assertMember).toHaveBeenCalledWith(
+        'org-1',
+        'staff-1',
+      );
+      expect(result.id).toBe('ticket-1');
+      expect(result.qrSecret).toBeUndefined();
+    });
+
+    it('rejects a caller who is neither the owner nor organization staff (403)', async () => {
+      prisma.ticket.findUnique.mockResolvedValue(ticket);
+      organizations.assertMember.mockRejectedValueOnce(
+        new ForbiddenException('You are not a member of this organization'),
+      );
+
+      await expect(service.findOne('outsider-1', 'ticket-1')).rejects.toThrow(
+        ForbiddenException,
+      );
+    });
+
+    it('throws NotFoundException for an unknown ticket', async () => {
+      prisma.ticket.findUnique.mockResolvedValue(null);
+
+      await expect(service.findOne('owner-1', 'missing')).rejects.toThrow(
+        NotFoundException,
+      );
+      expect(organizations.assertMember).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('getQrImage (#125)', () => {
+    const PNG_SIGNATURE = Buffer.from([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+    ]);
+    const ticket = {
+      id: 'ticket-1',
+      ownerId: 'owner-1',
+      qrSecret: 'qr-secret-1',
+      event: { organizationId: 'org-1', organization: {} },
+    };
+
+    it('renders a PNG of the ticket secret for its owner', async () => {
+      prisma.ticket.findUnique.mockResolvedValue(ticket);
+
+      const png = await service.getQrImage('owner-1', 'ticket-1');
+
+      expect(png.subarray(0, 8).equals(PNG_SIGNATURE)).toBe(true);
+    });
+
+    it('rejects anyone but the owner, including organization staff (403)', async () => {
+      prisma.ticket.findUnique.mockResolvedValue(ticket);
+
+      await expect(service.getQrImage('staff-1', 'ticket-1')).rejects.toThrow(
+        ForbiddenException,
+      );
+      expect(organizations.assertMember).not.toHaveBeenCalled();
+    });
+
+    it('throws NotFoundException for an unknown ticket', async () => {
+      prisma.ticket.findUnique.mockResolvedValue(null);
+
+      await expect(service.getQrImage('owner-1', 'missing')).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+  });
+
+  describe('issueQrToken (#129)', () => {
+    const ticket = {
+      id: 'ticket-1',
+      ownerId: 'owner-1',
+      event: { organizationId: 'org-1', organization: {} },
+    };
+
+    it("issues a token for the owner's ticket", async () => {
+      prisma.ticket.findUnique.mockResolvedValue(ticket);
+      qrTokens.issue.mockReturnValue({
+        token: 'v1.ticket-1.1790592030.sig',
+        expiresAt: '2026-10-17T12:00:30.000Z',
+        ttlSeconds: 30,
+      });
+
+      const result = await service.issueQrToken('owner-1', 'ticket-1');
+
+      expect(qrTokens.issue).toHaveBeenCalledWith('ticket-1');
+      expect(result.ttlSeconds).toBe(30);
+    });
+
+    it('rejects anyone but the owner without issuing a token (403)', async () => {
+      prisma.ticket.findUnique.mockResolvedValue(ticket);
+
+      await expect(
+        service.issueQrToken('outsider-1', 'ticket-1'),
+      ).rejects.toThrow(ForbiddenException);
+      expect(qrTokens.issue).not.toHaveBeenCalled();
+    });
+  });
+
   // ---- #321 Graceful degradation ----
 
   describe('verify — graceful RPC degradation (#321)', () => {
@@ -975,7 +1692,78 @@ describe('TicketsService', () => {
       expect(result.stale).toBe(true);
       expect(result.status).toBe('VALID');
       expect(result.onChainOwner).toBeNull();
+      // #380 — nothing to compare against while the chain is unreachable.
+      expect(result.ownerMismatch).toBe(false);
       // should NOT attempt a DB update when RPC is down
+      expect(prisma.ticket.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('verify — owner mismatch (#380)', () => {
+    const ticketRow = {
+      id: 'ticket-1',
+      ownerId: 'owner-1',
+      chainTicketId: 7n,
+      status: 'VALID',
+      seat: 'A1',
+      event: { organizationId: 'org-1', name: 'Radiohead Live' },
+      owner: { id: 'owner-1', name: 'Ada Lovelace', stellarPublicKey: 'GADA' },
+      ticketType: { name: 'GA' },
+    };
+
+    it('reports no mismatch and writes nothing when the chain agrees', async () => {
+      prisma.ticket.findUnique.mockResolvedValue(ticketRow);
+      stellar.verifyTicket.mockResolvedValue({
+        owner: 'GADA',
+        status: 'Valid',
+      });
+
+      const result = await service.verify('staff-1', 'qr-secret');
+
+      expect(result.ownerMismatch).toBe(false);
+      expect(result.ownerName).toBe('Ada Lovelace');
+      expect(prisma.user.findUnique).not.toHaveBeenCalled();
+      expect(prisma.ticket.update).not.toHaveBeenCalled();
+    });
+
+    it('flags a mismatch and reconciles the owner to the on-chain wallet’s account', async () => {
+      prisma.ticket.findUnique.mockResolvedValue(ticketRow);
+      stellar.verifyTicket.mockResolvedValue({
+        owner: 'GGRACE',
+        status: 'Valid',
+      });
+      prisma.user.findUnique.mockResolvedValue({
+        id: 'owner-2',
+        name: 'Grace Hopper',
+      });
+
+      const result = await service.verify('staff-1', 'qr-secret');
+
+      expect(result.ownerMismatch).toBe(true);
+      expect(result.onChainOwner).toBe('GGRACE');
+      expect(result.ownerName).toBe('Grace Hopper');
+      expect(prisma.user.findUnique).toHaveBeenCalledWith({
+        where: { stellarPublicKey: 'GGRACE' },
+        select: { id: true, name: true },
+      });
+      expect(prisma.ticket.update).toHaveBeenCalledWith({
+        where: { id: 'ticket-1' },
+        data: { ownerId: 'owner-2' },
+      });
+    });
+
+    it('flags a mismatch but keeps the owner when no account holds the on-chain wallet', async () => {
+      prisma.ticket.findUnique.mockResolvedValue(ticketRow);
+      stellar.verifyTicket.mockResolvedValue({
+        owner: 'GUNKNOWN',
+        status: 'Valid',
+      });
+      prisma.user.findUnique.mockResolvedValue(null);
+
+      const result = await service.verify('staff-1', 'qr-secret');
+
+      expect(result.ownerMismatch).toBe(true);
+      expect(result.ownerName).toBe('Ada Lovelace');
       expect(prisma.ticket.update).not.toHaveBeenCalled();
     });
   });
@@ -1210,11 +1998,17 @@ describe('TicketsService', () => {
   // ---- confirmCheckIn / confirmRevoke status updates (#413) ----
 
   describe('confirmCheckIn — status update', () => {
+    beforeEach(() => mockSignedCall('check_in', ['GORG', 7n]));
+
     const ticketRow = {
       id: 'ticket-1',
       eventId: 'event-1',
       ownerId: 'owner-1',
-      event: { organizationId: 'org-1', organization: {} },
+      chainTicketId: 7n,
+      event: {
+        organizationId: 'org-1',
+        organization: { stellarAccount: 'GORG' },
+      },
     };
 
     it('writes USED status and checkedInAt after a successful submission', async () => {
@@ -1233,13 +2027,12 @@ describe('TicketsService', () => {
       expect(stellar.submitSignedTransaction).toHaveBeenCalledWith(
         'signed-xdr',
       );
-      expect(prisma.ticket.update).toHaveBeenCalledWith({
-        where: { id: 'ticket-1' },
-        data: expect.objectContaining({
-          status: 'USED',
-          checkedInAt: expect.any(Date),
-        }),
-      });
+      const updateCall = prisma.ticket.update.mock.calls[0] as [
+        { where: { id: string }; data: { status: string; checkedInAt: Date } },
+      ];
+      expect(updateCall[0].where).toEqual({ id: 'ticket-1' });
+      expect(updateCall[0].data.status).toBe('USED');
+      expect(updateCall[0].data.checkedInAt).toBeInstanceOf(Date);
       expect(result.status).toBe('USED');
       expect((result.checkedInAt as Date).getTime()).toBeGreaterThanOrEqual(
         before,
@@ -1273,6 +2066,8 @@ describe('TicketsService', () => {
   });
 
   describe('confirmRevoke — status update', () => {
+    beforeEach(() => mockSignedCall('revoke_ticket', ['GORG', 7n]));
+
     const ticketRow = {
       id: 'ticket-1',
       eventId: 'event-1',
@@ -1306,6 +2101,18 @@ describe('TicketsService', () => {
       expect(result.status).toBe('REVOKED');
     });
 
+    it('cancels the ticket’s ACTIVE resale listing in the same transaction (#379)', async () => {
+      prisma.ticket.findUnique.mockResolvedValue(ticketRow);
+
+      await service.confirmRevoke('organizer-1', 'ticket-1', 'signed-xdr');
+
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+      expect(prisma.resaleListing.updateMany).toHaveBeenCalledWith({
+        where: { ticketId: 'ticket-1', status: 'ACTIVE' },
+        data: { status: 'CANCELLED' },
+      });
+    });
+
     it('does not update the ticket when submission fails', async () => {
       prisma.ticket.findUnique.mockResolvedValue(ticketRow);
       stellar.submitSignedTransaction.mockRejectedValueOnce(
@@ -1316,6 +2123,7 @@ describe('TicketsService', () => {
         service.confirmRevoke('organizer-1', 'ticket-1', 'bad-signed-xdr'),
       ).rejects.toThrow('Soroban submission failed');
       expect(prisma.ticket.update).not.toHaveBeenCalled();
+      expect(prisma.resaleListing.updateMany).not.toHaveBeenCalled();
     });
 
     it('requires the caller to be a member of the event organization', async () => {
@@ -1411,13 +2219,134 @@ describe('TicketsService', () => {
 
   // ---- Check-in with reason (#266) ----
 
+  describe('signed invocation guard on confirm paths (#157)', () => {
+    it('rejects a check-in envelope for a different ticket with a 400', async () => {
+      mockSignedCall('check_in', ['GORG', 8n]);
+      prisma.ticket.findUnique.mockResolvedValue({
+        id: 'ticket-1',
+        eventId: 'event-1',
+        ownerId: 'owner-1',
+        chainTicketId: 7n,
+        event: { organizationId: 'org-1', organization: { stellarAccount: 'GORG' } },
+      });
+
+      await expect(
+        service.confirmCheckIn('user-1', 'ticket-1', 'signed-xdr'),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(stellar.submitSignedTransaction).not.toHaveBeenCalled();
+      expect(prisma.ticket.update).not.toHaveBeenCalled();
+    });
+
+    it('rejects a revoke envelope that calls another function with a 400', async () => {
+      mockSignedCall('check_in', ['GORG', 7n]);
+      prisma.ticket.findUnique.mockResolvedValue({
+        id: 'ticket-1',
+        eventId: 'event-1',
+        ownerId: 'owner-1',
+        chainTicketId: 7n,
+        event: { organizationId: 'org-1', organization: { stellarAccount: 'GORG' } },
+      });
+
+      await expect(
+        service.confirmRevoke('organizer-1', 'ticket-1', 'signed-xdr'),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(stellar.submitSignedTransaction).not.toHaveBeenCalled();
+    });
+
+    it('rejects a cancel-resale envelope signed by another wallet with a 400', async () => {
+      mockSignedCall('cancel_resale', ['GSOMEONEELSE', 7n]);
+      prisma.ticket.findUnique.mockResolvedValue({
+        id: 'ticket-1',
+        ownerId: 'owner-1',
+        chainTicketId: 7n,
+        event: { organization: {} },
+      });
+      prisma.user.findUnique.mockResolvedValue(
+        createUser({ id: 'owner-1', stellarPublicKey: 'GOWNER' }),
+      );
+
+      await expect(
+        service.confirmCancelResale('owner-1', 'ticket-1', 'signed-xdr'),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(stellar.submitSignedTransaction).not.toHaveBeenCalled();
+    });
+
+    it('rejects a buy-resale envelope for a different ticket with a 400', async () => {
+      mockSignedCall('buy_resale', ['GBUYER', 9n]);
+      prisma.ticket.findUnique.mockResolvedValue({
+        id: 'ticket-1',
+        status: 'RESALE',
+        chainTicketId: 7n,
+        event: { organization: {} },
+      });
+      prisma.user.findUnique.mockResolvedValue(
+        createUser({ id: 'buyer-1', stellarPublicKey: 'GBUYER' }),
+      );
+
+      await expect(
+        service.confirmBuyResale('buyer-1', 'ticket-1', 'signed-xdr'),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(stellar.submitSignedTransaction).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('replayed confirm requests (#159)', () => {
+    const ticketRow = {
+      id: 'ticket-1',
+      eventId: 'event-1',
+      ownerId: 'owner-1',
+      chainTicketId: 7n,
+      event: { organizationId: 'org-1', organization: { stellarAccount: 'GORG' } },
+    };
+
+    it('returns the stored response without re-submitting or re-writing', async () => {
+      const stored = { id: 'ticket-1', status: 'USED' };
+      prisma.processedTx.findUnique.mockResolvedValue({
+        txHash: 'hash-1',
+        operation: 'check-in',
+        response: stored,
+      });
+      prisma.ticket.findUnique.mockResolvedValue(ticketRow);
+
+      const result = await service.confirmCheckIn('user-1', 'ticket-1', 'signed-xdr');
+
+      expect(result).toEqual(stored);
+      expect(prisma.processedTx.findUnique).toHaveBeenCalledWith({
+        where: { txHash: 'hash-1' },
+      });
+      expect(stellar.submitSignedTransaction).not.toHaveBeenCalled();
+      expect(prisma.ticket.update).not.toHaveBeenCalled();
+      expect(prisma.processedTx.create).not.toHaveBeenCalled();
+    });
+
+    it('records the processed marker in the same transaction as the update', async () => {
+      mockSignedCall('revoke_ticket', ['GORG', 7n]);
+      prisma.ticket.findUnique.mockResolvedValue(ticketRow);
+      prisma.ticket.update.mockImplementation(({ data }) =>
+        Promise.resolve({ id: 'ticket-1', ...data }),
+      );
+
+      await service.confirmRevoke('organizer-1', 'ticket-1', 'signed-xdr');
+
+      expect(prisma.processedTx.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          txHash: 'hash-1',
+          operation: 'revoke',
+        }) as object,
+      });
+    });
+  });
+
   describe('confirmCheckIn with reason', () => {
+    beforeEach(() => mockSignedCall('check_in', ['GORG', 7n]));
+
     it('stores check-in reason when provided', async () => {
       prisma.ticket.findUnique.mockResolvedValue({
         id: 'ticket-1',
         eventId: 'event-1',
         ownerId: 'owner-1',
-        event: { organizationId: 'org-1', organization: {} },
+        chainTicketId: 7n,
+        event: { organizationId: 'org-1', organization: { stellarAccount: 'GORG' } },
       });
       prisma.ticket.update.mockResolvedValue({
         id: 'ticket-1',
@@ -1446,7 +2375,8 @@ describe('TicketsService', () => {
         id: 'ticket-1',
         eventId: 'event-1',
         ownerId: 'owner-1',
-        event: { organizationId: 'org-1', organization: {} },
+        chainTicketId: 7n,
+        event: { organizationId: 'org-1', organization: { stellarAccount: 'GORG' } },
       });
       prisma.ticket.update.mockResolvedValue({
         id: 'ticket-1',

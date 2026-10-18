@@ -78,6 +78,38 @@ describe('EventsController', () => {
       );
     });
 
+    it('GET /events passes validated search filters to the service', async () => {
+      service.findPublished.mockResolvedValue([[], 0]);
+      await http()
+        .get('/events')
+        .query({
+          q: ' jazz ',
+          category: 'CONCERTS',
+          from: '2026-11-01T00:00:00.000Z',
+          to: '2026-11-30T00:00:00.000Z',
+        })
+        .expect(200);
+      expect(service.findPublished).toHaveBeenCalledWith(
+        expect.objectContaining({
+          q: 'jazz',
+          category: 'CONCERTS',
+          from: new Date('2026-11-01T00:00:00.000Z'),
+          to: new Date('2026-11-30T00:00:00.000Z'),
+        }),
+      );
+    });
+
+    it.each([
+      [{ category: 'PARTIES' }],
+      [{ from: 'soon' }],
+      [{ from: '2026-11-02', to: '2026-11-01' }],
+      [{ q: 'a'.repeat(101) }],
+      [{ venue: 'Fillmore' }],
+    ])('GET /events rejects invalid filters %j', async (query) => {
+      await http().get('/events').query(query).expect(400);
+      expect(service.findPublished).not.toHaveBeenCalled();
+    });
+
     it('GET /events/:eventId returns one event and propagates not-found', async () => {
       service.getWithReconciliation.mockResolvedValueOnce({ id: 'e1' });
       await http().get('/events/e1').expect(200);
@@ -86,6 +118,7 @@ describe('EventsController', () => {
         false,
         undefined,
       );
+      expect(service.getWithReconciliation).toHaveBeenCalledWith('e1', false);
 
       service.getWithReconciliation.mockRejectedValueOnce(
         new NotFoundException('Event not found'),
@@ -303,12 +336,12 @@ describe('EventsController', () => {
         await http()
           .post('/events/e1/confirm-publish')
           .set(AUTH)
-          .send({ signedXdr: 'signed', txHash: 'a'.repeat(64) })
+          .send({ signedXdr: 'AAAA', txHash: 'a'.repeat(64) })
           .expect(201);
         expect(service.confirmPublish).toHaveBeenCalledWith(
           TEST_USER.userId,
           'e1',
-          'signed',
+          'AAAA',
         );
       });
 

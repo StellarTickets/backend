@@ -1,8 +1,14 @@
 import 'reflect-metadata';
 import { Test } from '@nestjs/testing';
 import { SchedulerRegistry } from '@nestjs/schedule';
+import { ConfigModule } from '@nestjs/config';
 import { HEARTBEAT_JOB_NAME, HeartbeatJob } from './heartbeat.job';
 import { SchedulerModule, isSchedulerEnabled } from './scheduler.module';
+import { TicketStatusReconciliationJob } from './ticket-status-reconciliation.job';
+import { FeatureFlagsModule } from '../config/feature-flags.module';
+import { PrismaModule } from '../prisma/prisma.module';
+import { PrismaService } from '../prisma/prisma.service';
+import { StellarService } from '../stellar/stellar.service';
 
 describe('isSchedulerEnabled', () => {
   it('is on by default', () => {
@@ -28,8 +34,9 @@ describe('SchedulerModule.forRoot', () => {
   it('registers the schedule module and the sample job by default', () => {
     const dynamicModule = SchedulerModule.forRoot({});
 
-    expect(dynamicModule.imports).toHaveLength(1);
+    expect(dynamicModule.imports).toHaveLength(3);
     expect(dynamicModule.providers).toContain(HeartbeatJob);
+    expect(dynamicModule.providers).toContain(TicketStatusReconciliationJob);
   });
 
   it('registers nothing when SCHEDULER_ENABLED=false', () => {
@@ -43,8 +50,23 @@ describe('SchedulerModule.forRoot', () => {
 
   it('schedules the heartbeat job once the app is running', async () => {
     const app = await Test.createTestingModule({
-      imports: [SchedulerModule.forRoot({})],
-    }).compile();
+      imports: [
+        ConfigModule.forRoot({ isGlobal: true, ignoreEnvFile: true }),
+        FeatureFlagsModule,
+        PrismaModule,
+        SchedulerModule.forRoot({}),
+      ],
+    })
+      .overrideProvider(PrismaService)
+      .useValue({
+        ticket: {
+          findMany: jest.fn().mockResolvedValue([]),
+          updateMany: jest.fn(),
+        },
+      })
+      .overrideProvider(StellarService)
+      .useValue({ verifyTicket: jest.fn() })
+      .compile();
     await app.init();
 
     try {

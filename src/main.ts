@@ -12,6 +12,8 @@ async function bootstrap() {
     { DocumentBuilder, SwaggerModule },
     { GlobalExceptionFilter },
     { configureApp },
+    { Logger: PinoLogger },
+    { MetricsService },
   ] = await Promise.all([
     import('@nestjs/core'),
     import('./app.module.js'),
@@ -19,12 +21,17 @@ async function bootstrap() {
     import('@nestjs/swagger'),
     import('./common/filters/global-exception.filter.js'),
     import('./app.setup.js'),
+    import('nestjs-pino'),
+    import('./common/metrics/metrics.service.js'),
   ]);
-  const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
+    bufferLogs: true,
+  });
   if (tracing) app.enableShutdownHooks();
   const config = app.get(ConfigService);
 
-  configureApp(app, config);
+  app.useLogger(app.get(PinoLogger));
+  configureApp(app, config, app.get(MetricsService));
 
   app.useGlobalFilters(new GlobalExceptionFilter());
 

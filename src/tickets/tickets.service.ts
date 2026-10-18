@@ -8,7 +8,15 @@ import {
   Optional,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { Prisma, ResaleListingStatus, TicketStatus } from '@prisma/client';
+import { toBuffer } from 'qrcode';
+import {
+  EventStatus,
+  Prisma,
+  ResaleListing,
+  ResaleListingStatus,
+  Ticket,
+  TicketStatus,
+} from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { UNASSIGNED_SEAT } from '../common/constants/seat.constant';
 import {
@@ -16,15 +24,33 @@ import {
   TicketTypeSoldOutError,
 } from '../common/errors/domain.error';
 import { OrganizationsService } from '../organizations/organizations.service';
-import { StellarService } from '../stellar/stellar.service';
+import {
+  OnChainTicket,
+  SignedInvocation,
+  StellarService,
+} from '../stellar/stellar.service';
 import { AuditService } from '../audit/audit.service';
 import { NotificationService } from '../notifications/notifications.service';
 import { OfflineTokenService } from './offline-token.service';
+import { QrTokenService } from './qr-token.service';
 import { PromoCodesService } from '../promo-codes/promo-codes.service';
 import { GatesService } from '../gates/gates.service';
+import { FeatureFlagsService } from '../config/feature-flags.service';
 
 /** How long an offline-verifiable token stays valid before a scanner must re-verify online. */
 const OFFLINE_TOKEN_TTL_SECONDS = 12 * 60 * 60;
+
+/** Plain JSON for `ProcessedTx.response`: BigInts become strings, as they do in HTTP responses. */
+function toStoredResponse(value: unknown): Prisma.InputJsonValue {
+  if (value === undefined || value === null) {
+    return Prisma.JsonNull;
+  }
+  return JSON.parse(
+    JSON.stringify(value, (_key, v: unknown) =>
+      typeof v === 'bigint' ? v.toString() : v,
+    ),
+  ) as Prisma.InputJsonValue;
+}
 
 @Injectable()
 export class TicketsService {
@@ -40,6 +66,8 @@ export class TicketsService {
     @Optional() private readonly promoCodes?: PromoCodesService,
     @Optional() private readonly gates?: GatesService,
     @Optional() private readonly audit?: AuditService,
+    @Optional() private readonly featureFlags?: FeatureFlagsService,
+    @Optional() private readonly qrTokens?: QrTokenService,
   ) {}
 
   // ---- Organizer-authorized issuance (off-chain payment already settled) ----
@@ -56,9 +84,11 @@ export class TicketsService {
     await this.organizations.assertMember(event.organizationId, userId);
     this.assertHasCapacity(ticketType.quantityIssued, ticketType.quantityTotal);
     this.assertSaleWindow(ticketType.saleStartsAt, ticketType.saleEndsAt);
-    if (event.chainEventId === null) {
+    if (event.status !== EventStatus.PUBLISHED || event.chainEventId === null) {
       throw new BadRequestException(
-        'Event has not been published on-chain yet',
+        event.status === EventStatus.CANCELLED
+          ? 'Event has been cancelled'
+          : 'Event has not been published on-chain yet',
       );
     }
 
@@ -83,10 +113,21 @@ export class TicketsService {
     seat: string | undefined,
     signedXdr: string,
   ) {
-    const { event } = await this.getTicketTypeWithEvent(ticketTypeId);
+    const { ticketType, event } =
+      await this.getTicketTypeWithEvent(ticketTypeId);
     await this.organizations.assertMember(event.organizationId, userId);
+    const replay = await this.findProcessedTx<Ticket>(signedXdr);
+    if (replay) return replay.value;
     const toUser = await this.getUserWithWallet(toUserId);
     this.assertRecipientPublicKey(toUser.stellarPublicKey, toPublicKey);
+    // #377 — the DB row must describe the ticket the chain will mint.
+    this.assertSignedInvocation(signedXdr, 'issue_ticket', [
+      ['organizer', 0, event.organization.stellarAccount],
+      ['event', 1, event.chainEventId],
+      ['recipient', 2, toUser.stellarPublicKey],
+      ['tier', 3, ticketType.name],
+      ['seat', 4, seat ?? UNASSIGNED_SEAT],
+    ]);
     // #211 — fail fast on duplicate assigned seats before touching the chain.
     await this.assertSeatAvailable(event.id, seat);
 
@@ -115,12 +156,113 @@ export class TicketsService {
           chainTicketId,
           seat,
           issuedTxHash: txHash,
+          signedXdr,
+          operation: 'issue',
         });
       });
     } catch (err) {
       this.throwOnSeatConflict(err);
       throw err;
     }
+  }
+
+  // ---- Batch organizer-authorized issuance ----
+
+  /**
+   * #133 — Builds one `issue_ticket` transaction envelope per recipient in
+   * `recipients`, up to `ISSUE_BATCH_MAX_SIZE` at once (default 50).
+   *
+   * The batch is processed optimistically: each recipient is attempted
+   * independently, so a failure for one (e.g. seat conflict, user not found)
+   * is collected and returned alongside the successful payloads rather than
+   * aborting the whole request. Callers iterate `results` and re-drive any
+   * `status: "error"` entries individually.
+   *
+   * Only the build step is batched here. Each recipient still calls
+   * `POST /tickets/confirm-issue` individually so the Stellar transaction
+   * submission and DB writes remain atomic per ticket.
+   */
+  async buildIssueBatch(
+    userId: string,
+    ticketTypeId: string,
+    recipients: Array<{ toUserId: string; toPublicKey: string; seat?: string }>,
+  ) {
+    const maxBatchSize =
+      this.config?.get<number>('ISSUE_BATCH_MAX_SIZE') ?? 50;
+    if (recipients.length > maxBatchSize) {
+      throw new BadRequestException(
+        `Batch size exceeds the maximum of ${maxBatchSize} recipients`,
+      );
+    }
+
+    const { ticketType, event } =
+      await this.getTicketTypeWithEvent(ticketTypeId);
+    await this.organizations.assertMember(event.organizationId, userId);
+
+    if (event.status !== EventStatus.PUBLISHED || event.chainEventId === null) {
+      throw new BadRequestException(
+        event.status === EventStatus.CANCELLED
+          ? 'Event has been cancelled'
+          : 'Event has not been published on-chain yet',
+      );
+    }
+
+    const results = await Promise.all(
+      recipients.map(async ({ toUserId, toPublicKey, seat }) => {
+        try {
+          const toUser = await this.prisma.user.findUnique({
+            where: { id: toUserId },
+          });
+          if (!toUser) {
+            return {
+              toUserId,
+              status: 'error' as const,
+              error: 'User not found',
+            };
+          }
+          if (!toUser.stellarPublicKey) {
+            return {
+              toUserId,
+              status: 'error' as const,
+              error:
+                'Connect a Stellar wallet to your account before continuing',
+            };
+          }
+          if (toUser.stellarPublicKey !== toPublicKey) {
+            return {
+              toUserId,
+              status: 'error' as const,
+              error: 'Recipient public key does not match target user',
+            };
+          }
+
+          const unsignedXdr = await this.stellar.buildIssueTicketTx({
+            organizerPublicKey: event.organization.stellarAccount,
+            chainEventId: event.chainEventId!,
+            toPublicKey: toUser.stellarPublicKey,
+            tier: ticketType.name,
+            seat: seat ?? UNASSIGNED_SEAT,
+            price: ticketType.price,
+          });
+
+          return { toUserId, status: 'ok' as const, unsignedXdr };
+        } catch (err) {
+          return {
+            toUserId,
+            status: 'error' as const,
+            error: (err as Error).message ?? 'Unknown error',
+          };
+        }
+      }),
+    );
+
+    return {
+      ticketTypeId,
+      total: recipients.length,
+      succeeded: results.filter((r) => r.status === 'ok').length,
+      failed: results.filter((r) => r.status === 'error').length,
+      results,
+    };
   }
 
   // ---- Fully on-chain primary sale ----
@@ -134,9 +276,11 @@ export class TicketsService {
     const { ticketType, event } =
       await this.getTicketTypeWithEvent(ticketTypeId);
     this.assertHasCapacity(ticketType.quantityIssued, ticketType.quantityTotal);
-    if (event.chainEventId === null) {
+    if (event.status !== EventStatus.PUBLISHED || event.chainEventId === null) {
       throw new BadRequestException(
-        'Event has not been published on-chain yet',
+        event.status === EventStatus.CANCELLED
+          ? 'Event has been cancelled'
+          : 'Event has not been published on-chain yet',
       );
     }
     const buyer = await this.getUserWithWallet(buyerId);
@@ -168,11 +312,22 @@ export class TicketsService {
     signedXdr: string,
     promoCode?: string,
   ) {
-    const { event } = await this.getTicketTypeWithEvent(ticketTypeId);
+    const { ticketType, event } =
+      await this.getTicketTypeWithEvent(ticketTypeId);
+    const replay = await this.findProcessedTx<Ticket>(signedXdr);
+    if (replay) return replay.value;
+    const buyer = await this.getUserWithWallet(buyerId);
+    // #377 — the DB row must describe the ticket the chain will mint.
+    this.assertSignedInvocation(signedXdr, 'purchase_primary', [
+      ['buyer', 0, buyer.stellarPublicKey],
+      ['event', 1, event.chainEventId],
+      ['tier', 2, ticketType.name],
+      ['seat', 3, seat ?? UNASSIGNED_SEAT],
+    ]);
     // #211 — fail fast on duplicate assigned seats before touching the chain.
     await this.assertSeatAvailable(event.id, seat);
     const { result, txHash } =
-      await this.stellar.submitSignedTransaction(signedXdr);
+      await this.stellar.submitSignedTransaction(signedXdr, this.attendeeSubmitOptions());
     const chainTicketId = result as bigint;
 
     let ticket;
@@ -198,6 +353,8 @@ export class TicketsService {
           chainTicketId,
           seat,
           issuedTxHash: txHash,
+          signedXdr,
+          operation: 'purchase',
         });
       });
     } catch (err) {
@@ -207,14 +364,12 @@ export class TicketsService {
     if (promoCode) {
       await this.promoCodes!.redeem(event.id, buyerId, promoCode, ticket.id);
     }
-    const buyer = await this.prisma.user.findUnique({ where: { id: buyerId } });
-    if (buyer && this.notifications) {
+    if (this.notifications) {
       await this.notifications.sendTicketReceipt({
         to: buyer.email,
         buyerName: buyer.name,
         eventName: event.name,
-        ticketType: (await this.getTicketTypeWithEvent(ticketTypeId)).ticketType
-          .name,
+        ticketType: ticketType.name,
         seat: seat ?? UNASSIGNED_SEAT,
       });
     }
@@ -249,43 +404,100 @@ export class TicketsService {
     toPublicKey: string,
     signedXdr: string,
   ) {
-    await this.getOwnedTicket(ticketId, userId);
+    const ticket = await this.getOwnedTicket(ticketId, userId);
+    const replay = await this.findProcessedTx<Ticket>(signedXdr);
+    if (replay) return replay.value;
     const toUser = await this.getUserWithWallet(toUserId);
     this.assertRecipientPublicKey(toUser.stellarPublicKey, toPublicKey);
-    await this.stellar.submitSignedTransaction(signedXdr);
-    return this.prisma.ticket.update({
-      where: { id: ticketId },
-      data: { ownerId: toUserId, status: TicketStatus.VALID },
+    // #375 — reject a transfer signed to a different wallet than toUserId's
+    // before it ever reaches the chain.
+    this.assertSignedInvocation(signedXdr, 'transfer_ticket', [
+      ['ticket', 1, ticket.chainTicketId],
+      ['recipient', 2, toUser.stellarPublicKey],
+    ]);
+    await this.stellar.submitSignedTransaction(signedXdr, this.attendeeSubmitOptions());
+
+    // #375 — the chain is the source of truth for ownership: only record
+    // toUserId once the on-chain owner is confirmed to be their wallet.
+    // `stellarPublicKey` is unique, so this is the user that wallet maps to.
+    const onChain = await this.stellar.verifyTicket(ticket.chainTicketId);
+    if (onChain.owner !== toUser.stellarPublicKey) {
+      throw new ConflictException(
+        'On-chain owner does not match the requested recipient',
+      );
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      // #378 — the contract clears a listing when a listed ticket is
+      // transferred; mirror that so the marketplace stops showing it.
+      await tx.resaleListing.updateMany({
+        where: { ticketId, status: ResaleListingStatus.ACTIVE },
+        data: { status: ResaleListingStatus.CANCELLED },
+      });
+      const transferred = await tx.ticket.update({
+        where: { id: ticketId },
+        data: { ownerId: toUserId, status: TicketStatus.VALID },
+      });
+      await this.recordProcessedTx(tx, signedXdr, 'transfer', transferred);
+      return transferred;
     });
   }
 
   // ---- Verification (read-only, organizer/gate staff) ----
 
   async verify(userId: string, qrSecret: string) {
-    const ticket = await this.loadTicketForOrganizer(userId, { qrSecret });
+    // #129 — a rotating token carries the ticket id instead of the static
+    // secret; it is checked (signature, then expiry) before any lookup.
+    const ticket = await this.loadTicketForOrganizer(
+      userId,
+      QrTokenService.isToken(qrSecret)
+        ? { id: this.qrTokens!.verify(qrSecret) }
+        : { qrSecret },
+    );
 
     // #321 — Graceful degradation: if the Soroban RPC is unavailable, serve
     // the cached DB data with a `stale: true` marker rather than throwing.
-    let reconciledStatus: TicketStatus = ticket.status;
-    let onChainOwner: string | null = null;
-    let stale = false;
-
+    let onChain: OnChainTicket | null = null;
     try {
-      const onChain = await this.stellar.verifyTicket(ticket.chainTicketId);
-      reconciledStatus = onChain.status.toUpperCase() as TicketStatus;
-      onChainOwner = onChain.owner;
-
-      if (reconciledStatus !== ticket.status) {
-        await this.prisma.ticket.update({
-          where: { id: ticket.id },
-          data: { status: reconciledStatus },
-        });
-      }
+      onChain = await this.stellar.verifyTicket(ticket.chainTicketId);
     } catch (err) {
       this.logger.warn(
         `Soroban RPC unavailable during verify (ticketId=${ticket.id}): ${(err as Error).message}. Serving cached data.`,
       );
-      stale = true;
+    }
+
+    let reconciledStatus: TicketStatus = ticket.status;
+    let ownerName = ticket.owner.name;
+    // #380 — the DB owner is only the real holder while their wallet is the
+    // on-chain owner; staff must be warned when the two disagree.
+    let ownerMismatch = false;
+
+    if (onChain) {
+      reconciledStatus = onChain.status.toUpperCase() as TicketStatus;
+      ownerMismatch = ticket.owner.stellarPublicKey !== onChain.owner;
+      // `stellarPublicKey` is unique, so this is a single index lookup. An
+      // on-chain owner with no account here leaves `ownerId` as it is.
+      const chainOwner = ownerMismatch
+        ? await this.prisma.user.findUnique({
+            where: { stellarPublicKey: onChain.owner },
+            select: { id: true, name: true },
+          })
+        : null;
+      if (chainOwner) {
+        ownerName = chainOwner.name;
+      }
+
+      if (reconciledStatus !== ticket.status || chainOwner) {
+        await this.prisma.ticket.update({
+          where: { id: ticket.id },
+          data: {
+            ...(reconciledStatus !== ticket.status && {
+              status: reconciledStatus,
+            }),
+            ...(chainOwner && { ownerId: chainOwner.id }),
+          },
+        });
+      }
     }
 
     return {
@@ -293,10 +505,11 @@ export class TicketsService {
       eventName: ticket.event.name,
       tier: ticket.ticketType.name,
       seat: ticket.seat,
-      ownerName: ticket.owner.name,
+      ownerName,
       status: reconciledStatus,
-      onChainOwner,
-      stale,
+      onChainOwner: onChain?.owner ?? null,
+      ownerMismatch,
+      stale: onChain === null,
     };
   }
 
@@ -339,18 +552,28 @@ export class TicketsService {
     reason?: string,
   ) {
     const ticket = await this.loadTicketForOrganizer(userId, { id: ticketId });
+    const replay = await this.findProcessedTx<Ticket>(signedXdr);
+    if (replay) return replay.value;
+    this.assertSignedInvocation(signedXdr, 'check_in', [
+      ['organizer', 0, ticket.event.organization.stellarAccount],
+      ['ticket', 1, ticket.chainTicketId],
+    ]);
     if (gateId) {
       await this.gates!.assertBelongsToEvent(gateId, ticket.eventId);
     }
     await this.stellar.submitSignedTransaction(signedXdr);
-    return this.prisma.ticket.update({
-      where: { id: ticketId },
-      data: {
-        status: TicketStatus.USED,
-        checkedInAt: new Date(),
-        checkedInGateId: gateId ?? null,
-        checkInReason: reason ?? null,
-      },
+    return this.prisma.$transaction(async (tx) => {
+      const checkedIn = await tx.ticket.update({
+        where: { id: ticketId },
+        data: {
+          status: TicketStatus.USED,
+          checkedInAt: new Date(),
+          checkedInGateId: gateId ?? null,
+          checkInReason: reason ?? null,
+        },
+      });
+      await this.recordProcessedTx(tx, signedXdr, 'check-in', checkedIn);
+      return checkedIn;
     });
   }
 
@@ -367,18 +590,28 @@ export class TicketsService {
     reason?: string,
   ) {
     const ticket = await this.getTicketWithOrg(ticketId);
+    const replay = await this.findProcessedTx<Ticket>(signedXdr);
+    if (replay) return replay.value;
+    this.assertSignedInvocation(signedXdr, 'check_in', [
+      ['organizer', 0, ticket.event.organization.stellarAccount],
+      ['ticket', 1, ticket.chainTicketId],
+    ]);
     if (gateId) {
       await this.gates!.assertBelongsToEvent(gateId, ticket.eventId);
     }
     await this.stellar.submitSignedTransaction(signedXdr);
-    return this.prisma.ticket.update({
-      where: { id: ticketId },
-      data: {
-        status: TicketStatus.USED,
-        checkedInAt: new Date(),
-        checkedInGateId: gateId ?? null,
-        checkInReason: reason ?? null,
-      },
+    return this.prisma.$transaction(async (tx) => {
+      const checkedIn = await tx.ticket.update({
+        where: { id: ticketId },
+        data: {
+          status: TicketStatus.USED,
+          checkedInAt: new Date(),
+          checkedInGateId: gateId ?? null,
+          checkInReason: reason ?? null,
+        },
+      });
+      await this.recordProcessedTx(tx, signedXdr, 'check-in', checkedIn);
+      return checkedIn;
     });
   }
 
@@ -396,10 +629,20 @@ export class TicketsService {
 
   async confirmRevoke(userId: string, ticketId: string, signedXdr: string) {
     const ticket = await this.loadTicketForOrganizer(userId, { id: ticketId });
+    const replay = await this.findProcessedTx<Ticket>(signedXdr);
+    if (replay) return replay.value;
+    this.assertSignedInvocation(signedXdr, 'revoke_ticket', [
+      ['organizer', 0, ticket.event.organization.stellarAccount],
+      ['ticket', 1, ticket.chainTicketId],
+    ]);
     await this.stellar.submitSignedTransaction(signedXdr);
-    const revoked = await this.prisma.ticket.update({
-      where: { id: ticketId },
-      data: { status: TicketStatus.REVOKED },
+    const revoked = await this.prisma.$transaction(async (tx) => {
+      const row = await tx.ticket.update({
+        where: { id: ticketId },
+        data: { status: TicketStatus.REVOKED },
+      });
+      await this.recordProcessedTx(tx, signedXdr, 'revoke', row);
+      return row;
     });
     // #209 — audit ticket revocation.
     await this.audit?.record(userId, 'ticket.revoke', 'Ticket', ticketId, {
@@ -520,6 +763,8 @@ export class TicketsService {
     signedXdr: string,
     expiresAt?: string,
   ) {
+    const replay = await this.findProcessedTx<ResaleListing>(signedXdr);
+    if (replay) return replay.value;
     await this.assertWithinResaleLimit(userId);
     // #216 — fail fast when the ticket is already listed before touching the
     // chain. The DB-level partial unique index remains the source of truth.
@@ -533,7 +778,18 @@ export class TicketsService {
       ticket.event.maxResaleMultiplierBps,
     );
 
-    const { txHash } = await this.stellar.submitSignedTransaction(signedXdr);
+    // #376 — the listing price is whatever the signed envelope sets, so the
+    // body price must agree with it before anything is submitted.
+    this.assertSignedInvocation(signedXdr, 'list_for_resale', [
+      ['ticket', 1, ticket.chainTicketId],
+      ['price', 2, BigInt(price)],
+    ]);
+
+    const { txHash } = await this.stellar.submitSignedTransaction(signedXdr, this.attendeeSubmitOptions());
+    // #376 — store the price the chain actually recorded, not the body's.
+    const { resalePrice } = await this.stellar.verifyTicket(
+      ticket.chainTicketId,
+    );
 
     try {
       return await this.prisma.$transaction(async (tx) => {
@@ -541,20 +797,22 @@ export class TicketsService {
           where: { id: ticketId },
           data: { status: TicketStatus.RESALE },
         });
-        return tx.resaleListing.create({
+        const listing = await tx.resaleListing.create({
           data: {
             ticketId,
             sellerId: userId,
-            price: BigInt(price),
+            price: resalePrice,
             txHash,
             expiresAt: expiresAt ? new Date(expiresAt) : null,
             priceHistory: {
               create: {
-                price: BigInt(price),
+                price: resalePrice,
               },
             },
           },
         });
+        await this.recordProcessedTx(tx, signedXdr, 'list-resale', listing);
+        return listing;
       });
     } catch (err) {
       // #216 — a concurrent create raced us past the pre-check: the partial
@@ -661,8 +919,14 @@ export class TicketsService {
     ticketId: string,
     signedXdr: string,
   ) {
-    await this.getOwnedTicket(ticketId, userId);
-    await this.stellar.submitSignedTransaction(signedXdr);
+    const ticket = await this.getOwnedTicket(ticketId, userId);
+    if (await this.findProcessedTx<null>(signedXdr)) return;
+    const owner = await this.getUserWithWallet(userId);
+    this.assertSignedInvocation(signedXdr, 'cancel_resale', [
+      ['owner', 0, owner.stellarPublicKey],
+      ['ticket', 1, ticket.chainTicketId],
+    ]);
+    await this.stellar.submitSignedTransaction(signedXdr, this.attendeeSubmitOptions());
 
     return this.prisma.$transaction(async (tx) => {
       await tx.ticket.update({
@@ -673,6 +937,7 @@ export class TicketsService {
         where: { ticketId, status: ResaleListingStatus.ACTIVE },
         data: { status: ResaleListingStatus.CANCELLED },
       });
+      await this.recordProcessedTx(tx, signedXdr, 'cancel-resale', null);
     });
   }
 
@@ -691,17 +956,27 @@ export class TicketsService {
   }
 
   async confirmBuyResale(buyerId: string, ticketId: string, signedXdr: string) {
-    await this.stellar.submitSignedTransaction(signedXdr);
+    const ticket = await this.getTicketWithOrg(ticketId);
+    const replay = await this.findProcessedTx<Ticket>(signedXdr);
+    if (replay) return replay.value;
+    const buyer = await this.getUserWithWallet(buyerId);
+    this.assertSignedInvocation(signedXdr, 'buy_resale', [
+      ['buyer', 0, buyer.stellarPublicKey],
+      ['ticket', 1, ticket.chainTicketId],
+    ]);
+    await this.stellar.submitSignedTransaction(signedXdr, this.attendeeSubmitOptions());
 
     return this.prisma.$transaction(async (tx) => {
       await tx.resaleListing.updateMany({
         where: { ticketId, status: ResaleListingStatus.ACTIVE },
         data: { status: ResaleListingStatus.SOLD },
       });
-      return tx.ticket.update({
+      const bought = await tx.ticket.update({
         where: { id: ticketId },
         data: { ownerId: buyerId, status: TicketStatus.VALID },
       });
+      await this.recordProcessedTx(tx, signedXdr, 'buy-resale', bought);
+      return bought;
     });
   }
 
@@ -781,6 +1056,47 @@ export class TicketsService {
     });
   }
 
+  /**
+   * #121 — Fetches one ticket for its owner or for staff of the owning
+   * event's organization; anyone else gets 403. The `qrSecret` is only
+   * returned to the owner, since staff scan it rather than hold it.
+   */
+  async findOne(userId: string, ticketId: string) {
+    const ticket = await this.prisma.ticket.findUnique({
+      where: { id: ticketId },
+      include: {
+        event: { include: { organization: true } },
+        ticketType: true,
+      },
+    });
+    if (!ticket) {
+      throw new NotFoundException('Ticket not found');
+    }
+    if (ticket.ownerId === userId) {
+      return ticket;
+    }
+
+    await this.organizations.assertMember(ticket.event.organizationId, userId);
+    return { ...ticket, qrSecret: undefined };
+  }
+
+  /** #125 — PNG of the ticket's QR code (its `qrSecret`). Owner only. */
+  async getQrImage(userId: string, ticketId: string): Promise<Buffer> {
+    const ticket = await this.getOwnedTicket(ticketId, userId);
+    return toBuffer(ticket.qrSecret, {
+      type: 'png',
+      errorCorrectionLevel: 'M',
+      margin: 2,
+      width: 512,
+    });
+  }
+
+  /** #129 — Issues a short-lived signed token to render in place of the static `qrSecret`. Owner only. */
+  async issueQrToken(userId: string, ticketId: string) {
+    const ticket = await this.getOwnedTicket(ticketId, userId);
+    return this.qrTokens!.issue(ticket.id);
+  }
+
   /** Looks up a ticket by its on-chain id. Restricted to staff of the owning event's organization. */
   async findByChainTicketId(staffUserId: string, chainTicketId: bigint) {
     const ticket = await this.prisma.ticket.findUnique({
@@ -812,13 +1128,15 @@ export class TicketsService {
       chainTicketId: bigint;
       seat?: string;
       issuedTxHash: string;
+      signedXdr: string;
+      operation: string;
     },
   ) {
     await tx.ticketType.update({
       where: { id: params.ticketTypeId },
       data: { quantityIssued: { increment: 1 } },
     });
-    return tx.ticket.create({
+    const ticket = await tx.ticket.create({
       data: {
         eventId: params.eventId,
         ticketTypeId: params.ticketTypeId,
@@ -826,6 +1144,57 @@ export class TicketsService {
         chainTicketId: params.chainTicketId,
         seat: params.seat ?? UNASSIGNED_SEAT,
         issuedTxHash: params.issuedTxHash,
+      },
+    });
+    await this.recordProcessedTx(
+      tx,
+      params.signedXdr,
+      params.operation,
+      ticket,
+    );
+    return ticket;
+  }
+
+  /**
+   * #161 — attendee actions are wrapped in a platform-paid fee bump when
+   * `FEATURE_FEE_BUMP` is on, so attendees don't need XLM for gas.
+   */
+  private attendeeSubmitOptions(): { sponsorFee: boolean } {
+    return { sponsorFee: this.featureFlags?.isEnabled('feeBump') ?? false };
+  }
+
+  /**
+   * #159 — returns the response recorded for this envelope, if it was already
+   * confirmed. Callers check it after the membership check and before any
+   * validation: a replayed ticket or listing already exists, so the seat and
+   * listing checks would otherwise 409 a request that already succeeded.
+   */
+  private async findProcessedTx<T>(
+    signedXdr: string,
+  ): Promise<{ value: T } | null> {
+    const row = await this.prisma.processedTx.findUnique({
+      where: { txHash: this.stellar.txHashOf(signedXdr) },
+    });
+    return row ? { value: row.response as T } : null;
+  }
+
+  /**
+   * #159 — records the response inside the caller's transaction, so the
+   * processed marker commits or rolls back together with the DB changes. A
+   * concurrent duplicate hits the `txHash` primary key and fails the whole
+   * transaction.
+   */
+  private recordProcessedTx(
+    tx: Prisma.TransactionClient,
+    signedXdr: string,
+    operation: string,
+    response: unknown,
+  ) {
+    return tx.processedTx.create({
+      data: {
+        txHash: this.stellar.txHashOf(signedXdr),
+        operation,
+        response: toStoredResponse(response),
       },
     });
   }
@@ -1038,6 +1407,40 @@ export class TicketsService {
       throw new BadRequestException(
         'Recipient public key does not match target user',
       );
+    }
+  }
+
+  /**
+   * #375/#376/#377 — decodes the signed envelope and checks it calls `fn`
+   * with the values this request is about to record. Each `expected` entry
+   * is a label, the argument's position in the contract call, and the value
+   * it must hold. A mismatch is a 400: the client signed something other
+   * than what it asked us to record.
+   */
+  private assertSignedInvocation(
+    signedXdr: string,
+    fn: string,
+    expected: Array<[label: string, index: number, value: unknown]>,
+  ) {
+    let invocation: SignedInvocation;
+    try {
+      invocation = this.stellar.decodeSignedInvocation(signedXdr);
+    } catch (err) {
+      throw new BadRequestException(
+        `Signed transaction could not be decoded: ${(err as Error).message}`,
+      );
+    }
+    if (invocation.functionName !== fn) {
+      throw new BadRequestException(
+        `Signed transaction calls ${invocation.functionName}, expected ${fn}`,
+      );
+    }
+    for (const [label, index, value] of expected) {
+      if (invocation.args[index] !== value) {
+        throw new BadRequestException(
+          `Signed transaction ${label} does not match the request`,
+        );
+      }
     }
   }
 

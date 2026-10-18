@@ -74,8 +74,9 @@ export class UsersService {
 
   /** Used by organizers/attendees to resolve a recipient before issuing or transferring a ticket. */
   async lookupByEmail(email: string) {
+    const normalized = email.trim().toLowerCase();
     const user = await this.prisma.user.findUnique({
-      where: { email },
+      where: { email: normalized },
       select: { id: true, name: true },
     });
     if (!user) {

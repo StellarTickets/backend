@@ -30,6 +30,14 @@ Besides each variable's own format, `validate()` refuses to start when:
   one, pass this check; that covers self-hosted or local nodes such as
   `http://localhost:8000/soroban/rpc`. `SOROBAN_RPC_URL` must be an `http`
   or `https` URL.
+- **Settlement-asset display settings are invalid.** `SETTLEMENT_ASSET_CODE`
+  must be 1–12 uppercase letters or digits, and
+  `SETTLEMENT_ASSET_DECIMALS` must be between 0 and 18. These settings describe
+  the token already configured as the ticketing contract's `PaymentToken`;
+  changing them does not change the on-chain token.
+- **`METRICS_TOKEN` is too short.** When set, it must contain at least 32
+  characters. It protects the optional `/metrics` endpoint with bearer-token
+  authentication.
 
 ## API path prefix
 
@@ -90,6 +98,7 @@ issued.
 | Variable | Type | Required | Default | Validated at boot | Description |
 | --- | --- | --- | --- | --- | --- |
 | `NODE_ENV` | `development \| test \| production` | **required** | `development` | yes | Which NestJS environment the app runs in. Drives logging verbosity and whether development-only behaviour is enabled.
+| `LOG_LEVEL` | `fatal \| error \| warn \| info \| debug \| trace \| silent` | optional | `debug` | yes | Log level for pino logger: fatal, error, warn, info, debug, trace, silent.
 | `OTEL_TRACING_ENABLED` | `true \| false` | optional | `false` | yes | Opt in to HTTP/NestJS OpenTelemetry spans. Off unless literally 'true'. See docs/TRACING.md.
 | `OTEL_SERVICE_NAME` | string | optional | `stellar-tickets-backend` \* | yes | Service name attached to exported spans; defaults to stellar-tickets-backend.
 | `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | string | optional | `http://localhost:4318/v1/traces` \* | yes | OTLP HTTP trace collector URL. Defaults to http://localhost:4318/v1/traces.
@@ -110,22 +119,32 @@ issued.
 | `JWT_SECRET_FILE` | string | conditional | — | yes (when required) | Path of the file holding JWT_SECRET; required when SECRETS_PROVIDER=file.
 | `CORS_ORIGINS` | string | **required** | `http://localhost:3001` | yes | Comma-separated list of allowed CORS origins (e.g. "https://app.example.com,https://staging.example.com"). Wildcard (*) is NOT allowed in production. Used as the CORS allow-list and to build links in outbound email/webhooks.
 | `JSON_BODY_LIMIT` | string | optional | `100kb` | yes | Maximum accepted JSON request body, as an Express size string such as 100kb or 1mb. Larger payloads are rejected with 413. Default 100kb.
-| `CSP_DIRECTIVES` | string | optional | `{"defaultSrc":["'self'"],"scriptSrc":["'self'"]}` \* | yes | Helmet Content-Security-Policy directives as a JSON object string, e.g. {"defaultSrc":["'self'"]}. Leave unset to keep helmet's defaults.
+| `CSP_DIRECTIVES` | string | optional | — | yes | Helmet Content-Security-Policy directives as a JSON object string, e.g. {"defaultSrc":["'self'"]}. Leave unset to keep helmet's defaults.
 | `TRUST_PROXY` | string | optional | — | yes | Express `trust proxy` setting: `true`, `false`, a hop count, or a comma-separated list of proxy IPs / CIDR ranges. Unset means `false`. See docs/DEPLOYMENT.md.
 | `SOROBAN_RPC_URL` | string | **required** | — | yes | Soroban RPC endpoint the StellarService submits contract calls through.
+| `SETTLEMENT_ASSET_CODE` | string | optional | `XLM` | yes | Code shown alongside ticket prices for the configured contract settlement token.
+| `SETTLEMENT_ASSET_DECIMALS` | integer | optional | `7` | yes | Number of decimal places in the smallest unit used for ticket prices.
+| `METRICS_TOKEN` | string (min 32 chars) | optional | — | yes | Bearer token protecting the Prometheus metrics endpoint; unset disables it.
 | `STELLAR_NETWORK` | — | **required** | `testnet` | yes | Which Stellar network every contract call targets. Must match the network the `ticketing` contract is deployed on and the one user wallets are set
-| `TICKETING_CONTRACT_ID` | string | **required** | — | yes | Deployed `ticketing` contract's C... address.
-| `PLATFORM_SIGNER_SECRET` | string | **required** | — | yes | Platform hot wallet used only as a disposable source account for read-only contract simulations (verify_ticket, get_event). It signs nothing and is never used for a write. See docs/NON_CUSTODIAL.md.
+| `TICKETING_CONTRACT_ID` | — | **required** | — | yes | Deployed `ticketing` contract's C... address.
+| `PLATFORM_SIGNER_SECRET` | — | **required** | — | yes | Platform hot wallet used only as a disposable source account for read-only contract simulations (verify_ticket, get_event). It signs nothing and is never used for a write. See docs/NON_CUSTODIAL.md.
 | `OFFLINE_SIGNING_KEY_ID` | string | **required** | `2026-01` | yes | Key id of the Ed25519 key currently used to sign offline verification tokens. Must have a matching entry in OFFLINE_SIGNING_PUBLIC_KEYS.
 | `OFFLINE_SIGNING_PRIVATE_KEY` | string | **required** | — | yes | PEM-encoded Ed25519 private key used to sign offline verification tokens. See docs/OFFLINE_VERIFICATION.md for generation and rotation.
 | `OFFLINE_SIGNING_PUBLIC_KEYS` | string | **required** | — | yes | JSON map of key id -> PEM-encoded Ed25519 public key. Every key a scanner should still accept, current and retired, so tokens signed before a rotation keep verifying until they expire.
+| `TRANSACTION_BUILD_TIMEOUT_SECONDS` | integer | optional | `300` \* | yes | Soroban transaction time-bound set on every `build*Tx` envelope, in seconds. Default 300. See docs/NON_CUSTODIAL.md.
+| `TRANSACTION_POLL_TIMEOUT_SECONDS` | integer | optional | `15` \* | yes | How long `submitSignedTransaction` polls `getTransaction` for a result before giving up, in seconds. Default 15.
 | `PENDING_TX_RETENTION_MINUTES` | integer | optional | `60` | yes | How long a PendingTx row (build-transaction intent) stays valid before it's considered expired and eligible for cleanup.
 | `PENDING_TX_CLEANUP_INTERVAL_MINUTES` | integer | optional | `15` | yes | How often the PendingTx cleanup job runs, in minutes.
+| `TICKET_RECONCILIATION_INTERVAL_MINUTES` | integer | optional | `60` \* | yes | How often to compare cached ticket statuses with `verify_ticket`, in minutes. Defaults to 60.
 | `IDEMPOTENCY_KEY_TTL_MINUTES` | integer | optional | `15` | yes | How long a cached response for an Idempotency-Key stays valid, in minutes, before a repeated key is treated as a new request.
+| `FEE_BUMP_MAX_FEE_STROOPS` | integer | optional | `100000` \* | yes | Ceiling, in stroops, on the platform-paid fee for one sponsored attendee transaction when FEATURE_FEE_BUMP is on. Default 100000 (0.01 XLM).
 | `SCAN_RATE_LIMIT_MAX` | integer | optional | `10` | **no** | Scans allowed per window per device, for ticket check-in abuse prevention. See docs/RATE_LIMITING.md.
 | `SCAN_RATE_LIMIT_WINDOW_MS` | integer | optional | `60000` | **no** | Length of the scan rate-limit window, in milliseconds.
 | `FEATURE_FEE_BUMP` | boolean (string) | optional | `false` | **no** | Experimental: enable the fee-bump path. Off unless exactly 'true'. See docs/FEATURE_FLAGS.md.
 | `FEATURE_INDEXER` | boolean (string) | optional | `false` | **no** | Experimental: enable the chain indexer. Off unless exactly 'true'. See docs/FEATURE_FLAGS.md.
+| `ISSUE_BATCH_MAX_SIZE` | integer | optional | `50` | **no** | Maximum number of recipients in a single POST /tickets/issue-batch request.
+| `QR_TOKEN_TTL_SECONDS` | integer | optional | `30` | **no** | How long a rotating QR token from GET /tickets/:ticketId/qr-token stays valid, in seconds.
+| `QR_TOKEN_CLOCK_SKEW_SECONDS` | integer | optional | `5` | **no** | Extra grace, in seconds, after a rotating QR token expires, for scanners whose clock runs behind.
 | \* | | | | | The value used in code when the variable is unset. Commented out in `.env.example` because it only applies once the related optional feature is enabled. |
 
 <!-- END GENERATED: env table -->

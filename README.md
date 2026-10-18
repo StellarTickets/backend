@@ -191,7 +191,10 @@ the matching "confirm" endpoint accepts the signed XDR back.
 |---|---|
 | `GET /v1/tickets/mine` | Tickets the caller owns |
 | `GET /v1/tickets/resale` | Active resale listings (marketplace) |
-| `GET /v1/tickets/verify/:qrSecret` | Look up a ticket by its QR secret, for the `/verify` gate-scanner flow |
+| `GET /v1/tickets/:ticketId` | One ticket, for its owner or the event's organization staff |
+| `GET /v1/tickets/:ticketId/qr` | PNG of the ticket's QR code (owner only) |
+| `GET /v1/tickets/:ticketId/qr-token` | Short-lived signed token to show instead of the static QR secret (owner only) |
+| `GET /v1/tickets/verify/:qrSecret` | Look up a ticket by its QR secret or rotating QR token, for the `/verify` gate-scanner flow |
 | `POST /v1/tickets/issue` / `confirm-issue` | Organizer-authorized issuance (off-chain payment already settled) |
 | `POST /v1/tickets/purchase` / `confirm-purchase` | Fully on-chain primary sale |
 | `POST /v1/tickets/:ticketId/transfer` / `confirm-transfer` | Direct transfer to another user |

@@ -42,6 +42,29 @@ describe('env.validate', () => {
     ).toThrow();
   });
 
+  it('accepts settlement asset metadata and a protected metrics token', () => {
+    expect(() =>
+      validate(
+        validConfig({
+          SETTLEMENT_ASSET_CODE: 'USDC',
+          SETTLEMENT_ASSET_DECIMALS: '6',
+          METRICS_TOKEN: 'm'.repeat(32),
+        }),
+      ),
+    ).not.toThrow();
+  });
+
+  it('rejects invalid settlement asset decimals, asset codes, and short metrics tokens', () => {
+    for (const overrides of [
+      { SETTLEMENT_ASSET_DECIMALS: '-1' },
+      { SETTLEMENT_ASSET_DECIMALS: '19' },
+      { SETTLEMENT_ASSET_CODE: 'usd coin' },
+      { METRICS_TOKEN: 'short' },
+    ]) {
+      expect(() => validate(validConfig(overrides))).toThrow();
+    }
+  });
+
   it('accepts a valid TRUST_PROXY and treats it as optional', () => {
     expect(() => validate(validConfig({ TRUST_PROXY: '1' }))).not.toThrow();
     expect(() =>
@@ -153,6 +176,22 @@ describe('env.validate', () => {
     expect(() =>
       validate(validConfig({ WEBHOOK_QUEUE_ATTEMPTS: 'many' })),
     ).toThrow();
+  });
+
+  it('accepts a configured ticket reconciliation interval', () => {
+    expect(() =>
+      validate(validConfig({ TICKET_RECONCILIATION_INTERVAL_MINUTES: '5' })),
+    ).not.toThrow();
+  });
+
+  it('rejects ticket reconciliation intervals outside 1 to 1440 minutes', () => {
+    for (const interval of ['0', '1441', 'many']) {
+      expect(() =>
+        validate(
+          validConfig({ TICKET_RECONCILIATION_INTERVAL_MINUTES: interval }),
+        ),
+      ).toThrow();
+    }
   });
 
   it.each(['true', 'false'])('accepts SCHEDULER_ENABLED=%s', (value) => {
@@ -414,6 +453,21 @@ describe('env.validate', () => {
           }),
         ),
       ).not.toThrow();
+    });
+  });
+
+  describe('LOG_LEVEL', () => {
+    it.each(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'])(
+      'accepts valid log level %s',
+      (level) => {
+        expect(() => validate(validConfig({ LOG_LEVEL: level }))).not.toThrow();
+      },
+    );
+
+    it('rejects an invalid log level', () => {
+      expect(() =>
+        validate(validConfig({ LOG_LEVEL: 'verbose-garbage' })),
+      ).toThrow(/LOG_LEVEL/);
     });
   });
 });

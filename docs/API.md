@@ -437,8 +437,18 @@ soonest first, each with its visible ticket types and the organizer's
 name and slug. Served with `Cache-Control: public, max-age=60, s-maxage=300`
 and an application cache (`CACHE_TTL_SECONDS`).
 
+Optional filters, combined with AND (invalid values return `400`):
+
+| Param      | Description                                                         |
+| ---------- | ------------------------------------------------------------------- |
+| `q`        | Case-insensitive substring of the event name or venue (1–100 chars) |
+| `category` | One of the `Industry` values, e.g. `CONCERTS`                       |
+| `from`     | ISO 8601; only events with `startsAt >= from`                       |
+| `to`       | ISO 8601; only events with `startsAt <= to`; must not precede `from` |
+
 ```bash
 curl -s "$API/v1/events?page=1&limit=20"
+curl -s "$API/v1/events?q=jazz&category=CONCERTS&from=2026-11-01T00:00:00Z&to=2026-11-30T23:59:59Z"
 ```
 
 ```json
@@ -563,8 +573,11 @@ Returns the ticket type row.
 
 Members only. Build step: reserves a `chainEventId` and returns the
 unsigned `create_event` envelope for the organization's Stellar account
-to sign. `400` unless the event is a `DRAFT` without a chain id, `409`
-until it has at least one ticket type.
+to sign. `400` unless the event is a `DRAFT` that was never confirmed
+on-chain and has no pending reservation, `409` until it has at least one
+ticket type. A reservation stays pending for the envelope's time bound
+(`TRANSACTION_BUILD_TIMEOUT_SECONDS`); if it was never confirmed, the next
+call reuses the same `chainEventId` and returns a fresh envelope.
 
 ```bash
 curl -s -X POST "$API/v1/events/7a1f3c5e-9b2d-4e6f-8a0c-1d2e3f4a5b6c/publish" -H "Authorization: Bearer $TOKEN"
@@ -578,7 +591,8 @@ curl -s -X POST "$API/v1/events/7a1f3c5e-9b2d-4e6f-8a0c-1d2e3f4a5b6c/publish" -H
 
 Members only. Relays the signed envelope, reads the event back from the
 contract to confirm the id and organizer match, then sets
-`status: PUBLISHED` and `publishedTxHash`.
+`status: PUBLISHED` and `publishedTxHash`. `409` before anything is
+submitted unless the event is still a `DRAFT`.
 
 | field | type | rules |
 |---|---|---|
@@ -916,12 +930,61 @@ row comes with `event` (including `organization`) and `ticketType`.
 curl -s "$API/v1/tickets/by-chain/7" -H "Authorization: Bearer $TOKEN"
 ```
 
+### `GET /v1/tickets/:ticketId`
+
+One ticket with its `event` (including `organization`) and `ticketType`, for
+its owner or members of the event's organization. Anyone else gets `403`;
+an unknown id is `404`. Staff do not receive the ticket's `qrSecret`.
+
+```bash
+curl -s "$API/v1/tickets/6f0a2c4e-8b1d-4f3a-9e5c-7d8e9f0a1b2c" -H "Authorization: Bearer $TOKEN"
+```
+
+### `GET /v1/tickets/:ticketId/qr`
+
+Owner only (`403` for anyone else, `404` for an unknown id). A `512px` PNG
+(`Content-Type: image/png`, `Cache-Control: no-store`) encoding the ticket's
+`qrSecret`, ready for a client to display.
+
+```bash
+curl -s "$API/v1/tickets/6f0a2c4e-8b1d-4f3a-9e5c-7d8e9f0a1b2c/qr" -H "Authorization: Bearer $TOKEN" -o ticket.png
+```
+
+### `GET /v1/tickets/:ticketId/qr-token`
+
+Owner only. A short-lived signed token to render in place of the static
+`qrSecret`, so a screenshot of the QR code stops working once the token
+expires. Fetch a fresh one before `expiresAt` (`Cache-Control: no-store`).
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `QR_TOKEN_TTL_SECONDS` | `30` | How long a token lasts |
+| `QR_TOKEN_CLOCK_SKEW_SECONDS` | `5` | Extra grace after expiry, for scanners whose clock runs behind |
+
+```bash
+curl -s "$API/v1/tickets/6f0a2c4e-8b1d-4f3a-9e5c-7d8e9f0a1b2c/qr-token" -H "Authorization: Bearer $TOKEN"
+```
+
+```json
+{
+  "token": "v1.6f0a2c4e-8b1d-4f3a-9e5c-7d8e9f0a1b2c.1790592030.q2Zk...base64url...Ag",
+  "expiresAt": "2026-10-17T12:00:30.000Z",
+  "ttlSeconds": 30
+}
+```
+
 ### `GET /v1/tickets/verify/:qrSecret`
 
 Gate verification (members only, rate limited per `SCAN_RATE_LIMIT_*`,
-`429` when exceeded). Reads the ticket from the contract, reconciles the
+`429` when exceeded). `:qrSecret` is either the ticket's static `qrSecret`
+or a rotating token from `GET /v1/tickets/:ticketId/qr-token`; an expired
+token (past its expiry plus `QR_TOKEN_CLOCK_SKEW_SECONDS`) is rejected with
+`400`, and a forged one is `404`, like an unknown secret. Reads the ticket from the contract, reconciles the
 cached status, and falls back to the cached row with `stale: true` when
-Soroban RPC is unreachable.
+Soroban RPC is unreachable. `ownerMismatch` is `true` when the recorded
+owner's wallet is not `onChainOwner`; the owner is then reconciled to the
+account holding that wallet, if there is one, and `ownerName` names them.
+It is `false` when `stale` is `true`, since there is nothing to compare.
 
 ```bash
 curl -s "$API/v1/tickets/verify/c1d2e3f4-a5b6-4c7d-8e9f-0a1b2c3d4e5f" -H "Authorization: Bearer $TOKEN"
@@ -936,6 +999,7 @@ curl -s "$API/v1/tickets/verify/c1d2e3f4-a5b6-4c7d-8e9f-0a1b2c3d4e5f" -H "Author
   "ownerName": "Ada Lovelace",
   "status": "VALID",
   "onChainOwner": "GBAHZWO3UI3GAHPQCPSW6IR5N7HJ4UBRZNAFMSYB6DAKVNHQDOZIV2YJ",
+  "ownerMismatch": false,
   "stale": false
 }
 ```
@@ -1151,7 +1215,9 @@ curl -s -X POST "$API/v1/tickets/6f0a2c4e-8b1d-4f3a-9e5c-7d8e9f0a1b2c/revoke" -H
 #### `POST /v1/tickets/:ticketId/confirm-revoke`
 
 Body is `ConfirmSignedTxDto` (`signedXdr`, optional `txHash`). Returns
-the ticket row with `status: "REVOKED"` and writes an audit entry.
+the ticket row with `status: "REVOKED"` and writes an audit entry. An
+`ACTIVE` resale listing for the ticket is set to `CANCELLED` in the same
+transaction, so it leaves `GET /v1/tickets/resale`.
 
 ```bash
 curl -s -X POST "$API/v1/tickets/6f0a2c4e-8b1d-4f3a-9e5c-7d8e9f0a1b2c/confirm-revoke" \

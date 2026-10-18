@@ -44,6 +44,7 @@ describe('Ticket purchase concurrency (e2e, #217)', () => {
         txHash: 'c'.repeat(64),
       }),
     ),
+    decodeSignedInvocation: jest.fn(),
   };
 
   const mockNotificationService = {
@@ -132,7 +133,7 @@ describe('Ticket purchase concurrency (e2e, #217)', () => {
   it('never oversells quantityTotal under concurrent purchases', async () => {
     const quantityTotal = 3;
     const buyerCount = 8;
-    const { ticketType } = await seedSellableTier({ quantityTotal });
+    const { event, ticketType } = await seedSellableTier({ quantityTotal });
 
     const purchasers: User[] = [];
     for (let i = 0; i < buyerCount; i++) {
@@ -150,6 +151,22 @@ describe('Ticket purchase concurrency (e2e, #217)', () => {
       userIndex.set(buyer.id, buyer);
     }
 
+    const purchaseXdrs = purchasers.map((_, index) => `signed-xdr-${index}`);
+    // #377 — envelope `signed-xdr-<i>` is purchaser i's signed purchase of
+    // this tier, so the signed buyer/event/tier/seat match each request.
+    mockStellarService.decodeSignedInvocation.mockImplementation(
+      (signedXdr: string) => ({
+        functionName: 'purchase_primary',
+        args: [
+          purchasers[purchaseXdrs.indexOf(signedXdr)].stellarPublicKey,
+          event.chainEventId,
+          ticketType.name,
+          'unassigned',
+          ticketType.price,
+        ],
+      }),
+    );
+
     // Build every purchase request first (each carrying its own buyer id),
     // then execute them concurrently so the capacity race actually happens.
     const purchases = purchasers.map((buyer, index) =>
@@ -158,7 +175,7 @@ describe('Ticket purchase concurrency (e2e, #217)', () => {
         .set('x-test-user-id', buyer.id)
         .send({
           ticketTypeId: ticketType.id,
-          signedXdr: `signed-xdr-${index}`,
+          signedXdr: purchaseXdrs[index],
         }),
     );
     const responses = await Promise.all(purchases);

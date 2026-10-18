@@ -27,6 +27,25 @@ describe('RegisterDto', () => {
     expect(errors.some((e) => e.property === 'password')).toBe(true);
   });
 
+  it('accepts a password of exactly 72 bytes (#386)', async () => {
+    const errors = await validate(build({ password: 'a'.repeat(72) }));
+    expect(errors).toHaveLength(0);
+  });
+
+  it('rejects a 100-character password that bcrypt would truncate (#386)', async () => {
+    const errors = await validate(build({ password: 'a'.repeat(100) }));
+    const passwordError = errors.find((e) => e.property === 'password');
+    expect(passwordError?.constraints).toEqual({
+      isByteLength: 'password must be at most 72 bytes',
+    });
+  });
+
+  it('measures the password limit in UTF-8 bytes, not characters (#386)', async () => {
+    // 25 x "€" is 25 characters but 75 bytes in UTF-8.
+    const errors = await validate(build({ password: '€'.repeat(25) }));
+    expect(errors.some((e) => e.property === 'password')).toBe(true);
+  });
+
   it('rejects an empty name', async () => {
     const errors = await validate(build({ name: '' }));
     expect(errors.some((e) => e.property === 'name')).toBe(true);
