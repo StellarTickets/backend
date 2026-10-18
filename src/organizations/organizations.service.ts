@@ -8,6 +8,7 @@ import {
 import { OrgMemberRole, UserRole } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
+import { nextAvailableSlug, slugify } from '../common/utils/slug';
 import { CreateOrganizationDto } from './dto/create-organization.dto';
 
 @Injectable()
@@ -18,18 +19,13 @@ export class OrganizationsService {
   ) {}
 
   async create(userId: string, dto: CreateOrganizationDto) {
-    const existingSlug = await this.prisma.organization.findUnique({
-      where: { slug: dto.slug },
-    });
-    if (existingSlug) {
-      throw new ConflictException('That organization slug is already taken');
-    }
+    const slug = await this.resolveSlug(dto);
 
     const org = await this.prisma.$transaction(async (tx) => {
       const created = await tx.organization.create({
         data: {
           name: dto.name,
-          slug: dto.slug,
+          slug,
           industry: dto.industry,
           stellarAccount: dto.stellarAccount,
           logoUrl: dto.logoUrl,
@@ -59,6 +55,29 @@ export class OrganizationsService {
       },
     );
     return org;
+  }
+
+  /**
+   * An explicit slug must be free. Without one, the slug is derived from the
+   * name and suffixed `-2`, `-3`, … until it no longer collides.
+   */
+  private async resolveSlug(dto: CreateOrganizationDto): Promise<string> {
+    if (dto.slug) {
+      const existingSlug = await this.prisma.organization.findUnique({
+        where: { slug: dto.slug },
+      });
+      if (existingSlug) {
+        throw new ConflictException('That organization slug is already taken');
+      }
+      return dto.slug;
+    }
+
+    const base = slugify(dto.name);
+    const taken = await this.prisma.organization.findMany({
+      where: { slug: { startsWith: base } },
+      select: { slug: true },
+    });
+    return nextAvailableSlug(base, new Set(taken.map((o) => o.slug)));
   }
 
   async findMine(userId: string) {

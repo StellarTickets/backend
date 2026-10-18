@@ -80,6 +80,57 @@ describe('OrganizationsService', () => {
       expect(org).toMatchObject({ id: 'org-1', slug: 'test-org' });
     });
 
+    describe('auto-generated slug', () => {
+      // A tiny in-memory slug table so successive creates see earlier ones.
+      let slugs: string[];
+
+      beforeEach(() => {
+        slugs = [];
+        prisma.organization.findMany.mockImplementation(
+          ({ where }: { where: { slug: { startsWith: string } } }) =>
+            Promise.resolve(
+              slugs
+                .filter((s) => s.startsWith(where.slug.startsWith))
+                .map((slug) => ({ slug })),
+            ),
+        );
+        prisma.organization.create.mockImplementation(
+          ({ data }: { data: { slug: string } }) => {
+            slugs.push(data.slug);
+            return Promise.resolve(createOrganization({ slug: data.slug }));
+          },
+        );
+      });
+
+      const sameName = () =>
+        ({
+          name: 'Acme Events',
+          industry: 'CONCERTS',
+          stellarAccount: 'G'.repeat(56),
+        }) as never;
+
+      it('gives three same-name orgs deterministic, distinct slugs', async () => {
+        const first = await service.create('user-1', sameName());
+        const second = await service.create('user-2', sameName());
+        const third = await service.create('user-3', sameName());
+
+        expect([first.slug, second.slug, third.slug]).toEqual([
+          'acme-events',
+          'acme-events-2',
+          'acme-events-3',
+        ]);
+        expect(prisma.organization.findUnique).not.toHaveBeenCalled();
+      });
+
+      it('ignores unrelated slugs that merely share the prefix', async () => {
+        slugs.push('acme-events-europe');
+
+        const org = await service.create('user-1', sameName());
+
+        expect(org.slug).toBe('acme-events');
+      });
+    });
+
     it('rolls back when a write inside the transaction fails', async () => {
       prisma.organization.findUnique.mockResolvedValue(null);
       prisma.organization.create.mockResolvedValue(

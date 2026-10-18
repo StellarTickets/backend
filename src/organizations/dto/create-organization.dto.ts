@@ -13,6 +13,7 @@ import {
 import { Industry } from '@prisma/client';
 import { IsStellarPublicKey } from '../../common/decorators/is-stellar-public-key.decorator';
 import { Trim } from '../../common/decorators/trim.decorator';
+import { SLUG_MAX_LENGTH } from '../../common/utils/slug';
 
 export class CreateOrganizationDto {
   @Trim()
@@ -21,11 +22,13 @@ export class CreateOrganizationDto {
   @MaxLength(256)
   name!: string;
 
+  /** Derived from `name` (with a `-2`, `-3`, … suffix if taken) when omitted. */
+  @IsOptional()
   @Matches(/^[a-z0-9]+(-[a-z0-9]+)*$/, {
     message: 'slug must be lowercase, alphanumeric, and hyphen-separated',
   })
-  @MaxLength(128)
-  slug!: string;
+  @MaxLength(SLUG_MAX_LENGTH)
+  slug?: string;
 
   @IsEnum(Industry)
   industry!: Industry;
