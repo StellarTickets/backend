@@ -6,6 +6,7 @@ import {
   IsInt,
   IsOptional,
   IsString,
+  IsUrl,
   Max,
   MaxLength,
   Min,
@@ -16,6 +17,7 @@ import {
 import { Industry } from '@prisma/client';
 import { Trim } from '../../common/decorators/trim.decorator';
 import { CreateEventTicketTypeDto } from './create-ticket-type.dto';
+import { IsIanaTimeZone } from '../../common/decorators/is-iana-timezone.decorator';
 
 /**
  * How far in the past `startsAt` may be before it's rejected. Absorbs client
@@ -31,6 +33,16 @@ export class CreateEventDto {
   @MaxLength(256)
   name!: string;
 
+  @Trim()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(5000)
+  description!: string;
+
+  @IsOptional()
+  @IsUrl({ require_protocol: true })
+  imageUrl?: string | null;
+
   @IsEnum(Industry, {
     message: `category must be one of: ${Object.values(Industry).join(', ')}`,
   })
@@ -41,6 +53,10 @@ export class CreateEventDto {
   @MinLength(1)
   @MaxLength(256)
   venue!: string;
+
+  @Trim()
+  @IsIanaTimeZone()
+  timezone!: string;
 
   @Type(() => Date)
   @IsDate()

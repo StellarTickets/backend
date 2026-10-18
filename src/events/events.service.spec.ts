@@ -30,7 +30,14 @@ describe('EventsService', () => {
       groupBy: jest.Mock;
     };
     ticket: { count: jest.Mock };
-    ticketType: { count: jest.Mock; createMany: jest.Mock; create: jest.Mock };
+    ticketType: {
+      count: jest.Mock;
+      createMany: jest.Mock;
+      create: jest.Mock;
+      findFirst: jest.Mock;
+      updateMany: jest.Mock;
+      findUniqueOrThrow: jest.Mock;
+    };
   };
   let organizations: {
     assertMember: jest.Mock;
@@ -68,6 +75,9 @@ describe('EventsService', () => {
         count: jest.fn().mockResolvedValue(1),
         createMany: jest.fn(),
         create: jest.fn(),
+        findFirst: jest.fn(),
+        updateMany: jest.fn(),
+        findUniqueOrThrow: jest.fn(),
       },
     };
     organizations = {
@@ -125,14 +135,20 @@ describe('EventsService', () => {
 
       await service.create('organizer-1', 'org-1', {
         name: 'Radiohead Live',
+        description: 'A live performance.',
+        imageUrl: 'https://example.com/radiohead.jpg',
         category: 'CONCERTS',
         venue: 'O2 Arena',
+        timezone: 'Europe/London',
         startsAt: new Date(),
       } as never);
 
       expect(prisma.event.create).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({
+            description: 'A live performance.',
+            imageUrl: 'https://example.com/radiohead.jpg',
+            timezone: 'Europe/London',
             maxResaleMultiplierBps: 11_000,
             royaltyBps: 500,
           }) as never,
@@ -234,7 +250,10 @@ describe('EventsService', () => {
         }),
         organization: createOrganization({ stellarAccount: 'GORG' }),
       });
-      prisma.ticketType.create.mockResolvedValue({ id: 'tt-1' });
+      prisma.ticketType.create.mockResolvedValue({
+        id: 'tt-1',
+        price: 1_000n,
+      });
 
       await service.addTicketType('organizer-1', 'event-1', dto);
 
@@ -294,6 +313,74 @@ describe('EventsService', () => {
         service.addTicketType('outsider-1', 'event-1', dto),
       ).rejects.toThrow('not a member');
       expect(prisma.ticketType.create).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('updateTicketType (#101)', () => {
+    beforeEach(() => {
+      prisma.ticketType.findFirst.mockResolvedValue({
+        id: 'tt-1',
+        eventId: 'event-1',
+        quantityIssued: 10,
+        event: { organizationId: 'org-1' },
+      });
+      prisma.ticketType.findUniqueOrThrow.mockResolvedValue({
+        id: 'tt-1',
+        price: 1_000n,
+        quantityIssued: 10,
+        quantityTotal: 10,
+      });
+    });
+
+    it('allows quantityTotal to equal quantityIssued', async () => {
+      prisma.ticketType.updateMany.mockResolvedValue({ count: 1 });
+
+      const result = await service.updateTicketType(
+        'organizer-1',
+        'event-1',
+        'tt-1',
+        { quantityTotal: 10 },
+      );
+
+      expect(prisma.ticketType.updateMany).toHaveBeenCalledWith({
+        where: {
+          id: 'tt-1',
+          eventId: 'event-1',
+          quantityIssued: { lte: 10 },
+        },
+        data: { quantityTotal: 10 },
+      });
+      expect(result.quantityTotal).toBe(10);
+    });
+
+    it('returns 409 when quantityTotal would be below quantityIssued', async () => {
+      prisma.ticketType.updateMany.mockResolvedValue({ count: 0 });
+
+      const attempt = service.updateTicketType(
+        'organizer-1',
+        'event-1',
+        'tt-1',
+        { quantityTotal: 9 },
+      );
+
+      await expect(attempt).rejects.toBeInstanceOf(ConflictException);
+      await expect(attempt).rejects.toMatchObject({
+        message: 'quantityTotal cannot be lower than quantityIssued',
+        status: 409,
+      });
+      expect(prisma.ticketType.findUniqueOrThrow).not.toHaveBeenCalled();
+    });
+
+    it('returns not-found when the ticket type is outside the event', async () => {
+      prisma.ticketType.findFirst.mockResolvedValue(null);
+
+      await expect(
+        service.updateTicketType('organizer-1', 'event-1', 'tt-other', {
+          quantityTotal: 10,
+        }),
+      ).rejects.toBeInstanceOf(NotFoundException);
+      expect(organizations.assertMember).not.toHaveBeenCalled();
+      expect(prisma.ticketType.updateMany).not.toHaveBeenCalled();
     });
   });
 
@@ -684,7 +771,7 @@ describe('EventsService', () => {
           'organizer-1',
         );
 
-        expect(event).toBe(draft);
+        expect(event).toMatchObject(draft);
       });
 
       it('shows a published event to anonymous callers without a membership lookup', async () => {

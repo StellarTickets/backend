@@ -116,8 +116,11 @@ describe('Event lifecycle (e2e)', () => {
       .post(`/v1/organizations/${organizationId}/events`)
       .send({
         name: `Test Concert ${randomUUID()}`,
+        description: 'A test concert.',
+        imageUrl: 'https://example.com/test-concert.jpg',
         category: 'CONCERTS',
         venue: 'Test Arena',
+        timezone: 'UTC',
         startsAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
       })
       .expect(201);

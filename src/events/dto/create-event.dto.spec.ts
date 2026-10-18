@@ -12,8 +12,11 @@ const inMs = (offset: number) => new Date(Date.now() + offset).toISOString();
 function build(overrides: Record<string, unknown> = {}) {
   return plainToInstance(CreateEventDto, {
     name: 'Radiohead Live',
+    description: 'A live performance.',
+    imageUrl: 'https://example.com/event.jpg',
     category: 'CONCERTS',
     venue: 'Amphitheater',
+    timezone: 'Europe/London',
     startsAt: inMs(24 * 60 * 60 * 1000),
     ...overrides,
   });
@@ -30,6 +33,25 @@ describe('CreateEventDto', () => {
       build({ maxResaleMultiplierBps: 12_000, royaltyBps: 500 }),
     );
     expect(errors).toHaveLength(0);
+  });
+
+  it('accepts a null imageUrl', async () => {
+    const errors = await validate(build({ imageUrl: null }));
+    expect(errors).toHaveLength(0);
+  });
+
+  it('rejects an invalid imageUrl', async () => {
+    const errors = await validate(build({ imageUrl: 'not-a-url' }));
+    expect(errors.some((e) => e.property === 'imageUrl')).toBe(true);
+  });
+
+  it('accepts a valid IANA timezone and rejects an invalid one', async () => {
+    await expect(
+      validate(build({ timezone: 'Africa/Lagos' })),
+    ).resolves.toHaveLength(0);
+
+    const errors = await validate(build({ timezone: 'Mars/Olympus_Mons' }));
+    expect(errors.some((e) => e.property === 'timezone')).toBe(true);
   });
 
   it('rejects a maxResaleMultiplierBps below 100% (would be a discount, not a cap)', async () => {

@@ -180,8 +180,12 @@ model Event {
   organization           Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   organizationId         String
   name                   String
+  description            String
+  imageUrl               String?
   category               Industry
   venue                  String
+  /// IANA time-zone identifier used to display UTC timestamps at the venue.
+  timezone               String
   startsAt               DateTime
   endsAt                 DateTime?
   /// The `event_id` (u64) this event was registered under on the ticketing

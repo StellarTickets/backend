@@ -108,6 +108,44 @@ describe('UsersService', () => {
     });
   });
 
+  describe('updateProfile', () => {
+    it('updates and returns the profile projection', async () => {
+      prisma.user.update.mockResolvedValue({
+        id: 'user-1',
+        name: 'Ada Lovelace',
+      });
+
+      await expect(
+        service.updateProfile('user-1', 'Ada Lovelace'),
+      ).resolves.toEqual({ id: 'user-1', name: 'Ada Lovelace' });
+      expect(prisma.user.update).toHaveBeenCalledWith({
+        where: { id: 'user-1' },
+        data: { name: 'Ada Lovelace' },
+        select: {
+          id: true,
+          email: true,
+          name: true,
+          role: true,
+          stellarPublicKey: true,
+          createdAt: true,
+        },
+      });
+    });
+
+    it('returns not-found when the account no longer exists', async () => {
+      prisma.user.update.mockRejectedValue(
+        new Prisma.PrismaClientKnownRequestError('Record not found', {
+          code: 'P2025',
+          clientVersion: '6.19.3',
+        }),
+      );
+
+      await expect(
+        service.updateProfile('missing', 'Ada Lovelace'),
+      ).rejects.toBeInstanceOf(NotFoundException);
+    });
+  });
+
   describe('lookupByEmail', () => {
     it('throws NotFoundException when no account matches', async () => {
       prisma.user.findUnique.mockResolvedValue(null);

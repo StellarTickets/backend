@@ -249,6 +249,20 @@ curl -s -X PATCH "$API/v1/users/me/wallet" \
 
 `409` when another account already uses that wallet.
 
+### `PATCH /v1/users/me`
+
+Updates the caller's display name and returns the updated profile.
+
+| field | type | rules |
+|---|---|---|
+| `name` | string | required, 1 to 256 characters after trimming |
+
+```bash
+curl -s -X PATCH "$API/v1/users/me" \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"name":"Ada Lovelace"}'
+```
+
 ### `GET /v1/users/lookup?email=`
 
 Resolves a recipient before an issue or transfer. `email` must be a
@@ -515,6 +529,9 @@ curl -s "$API/v1/events?q=jazz&category=CONCERTS&from=2026-11-01T00:00:00Z&to=20
   {
     "id": "7a1f3c5e-9b2d-4e6f-8a0c-1d2e3f4a5b6c",
     "name": "Launch Night",
+    "description": "A night of live music at The Fillmore.",
+    "imageUrl": "https://cdn.example.com/launch-night.jpg",
+    "timezone": "America/Los_Angeles",
     "status": "PUBLISHED",
     "chainEventId": "42",
     "publishedTxHash": "abababababababababababababababababababababababababababababababab",
@@ -589,8 +606,11 @@ Members only. Creates a `DRAFT` event.
 | field | type | rules |
 |---|---|---|
 | `name` | string | required, 2 to 256 characters after trimming |
+| `description` | string | required, 1 to 5000 characters after trimming |
+| `imageUrl` | string or null | optional, absolute URL when provided |
 | `category` | string | required, an `Industry` value |
 | `venue` | string | required, 1 to 256 characters after trimming |
+| `timezone` | string | required, valid IANA time-zone identifier |
 | `startsAt` | date | required, not more than 60 seconds in the past |
 | `endsAt` | date | optional |
 | `maxResaleMultiplierBps` | integer | optional, 10000 to 50000, default 11000 (resale capped at 110% of face value) |
@@ -599,7 +619,7 @@ Members only. Creates a `DRAFT` event.
 ```bash
 curl -s -X POST "$API/v1/organizations/2c7e4a10-5b6d-4f8e-9a1b-3c4d5e6f7a8b/events" \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d '{"name":"Launch Night","category":"CONCERTS","venue":"The Fillmore","startsAt":"2026-12-01T20:00:00.000Z","endsAt":"2026-12-01T23:00:00.000Z","maxResaleMultiplierBps":11000,"royaltyBps":500}'
+  -d '{"name":"Launch Night","description":"A night of live music at The Fillmore.","imageUrl":"https://cdn.example.com/launch-night.jpg","category":"CONCERTS","venue":"The Fillmore","timezone":"America/Los_Angeles","startsAt":"2026-12-01T20:00:00.000Z","endsAt":"2026-12-01T23:00:00.000Z","maxResaleMultiplierBps":11000,"royaltyBps":500}'
 ```
 
 Returns the event row.
@@ -626,6 +646,22 @@ curl -s -X POST "$API/v1/events/7a1f3c5e-9b2d-4e6f-8a0c-1d2e3f4a5b6c/ticket-type
 ```
 
 Returns the ticket type row.
+
+### `PATCH /v1/events/:eventId/ticket-types/:ticketTypeId`
+
+Members only. Updates a ticket type's total inventory. The value may equal
+`quantityIssued`, but cannot be lower; an attempted reduction below the
+issued count returns `409`.
+
+| field | type | rules |
+|---|---|---|
+| `quantityTotal` | integer | required, positive and at least `quantityIssued` |
+
+```bash
+curl -s -X PATCH "$API/v1/events/7a1f3c5e-9b2d-4e6f-8a0c-1d2e3f4a5b6c/ticket-types/4b8d2f6a-0c1e-4a3b-9d5f-6e7a8b9c0d1e" \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"quantityTotal":750}'
+```
 
 ### `POST /v1/events/:eventId/publish`
 

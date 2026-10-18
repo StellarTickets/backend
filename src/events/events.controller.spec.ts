@@ -1,5 +1,6 @@
 import { HEADERS_METADATA } from '@nestjs/common/constants';
 import {
+  ConflictException,
   ForbiddenException,
   INestApplication,
   NotFoundException,
@@ -26,6 +27,7 @@ describe('EventsController', () => {
     summarizeForOrganization: jest.fn(),
     create: jest.fn(),
     addTicketType: jest.fn(),
+    updateTicketType: jest.fn(),
     buildPublishTx: jest.fn(),
     unpublish: jest.fn(),
     confirmPublish: jest.fn(),
@@ -118,7 +120,6 @@ describe('EventsController', () => {
         false,
         undefined,
       );
-      expect(service.getWithReconciliation).toHaveBeenCalledWith('e1', false);
 
       service.getWithReconciliation.mockRejectedValueOnce(
         new NotFoundException('Event not found'),
@@ -160,6 +161,7 @@ describe('EventsController', () => {
       ['get', '/organizations/o1/events'],
       ['post', '/organizations/o1/events'],
       ['post', '/events/e1/ticket-types'],
+      ['patch', '/events/e1/ticket-types/t1'],
       ['post', '/events/e1/publish'],
       ['post', '/events/e1/unpublish'],
       ['post', '/events/e1/confirm-publish'],
@@ -235,8 +237,11 @@ describe('EventsController', () => {
     describe('POST /organizations/:organizationId/events', () => {
       const body = {
         name: 'Concert',
+        description: 'An evening concert.',
+        imageUrl: 'https://example.com/concert.jpg',
         category: 'CONCERTS',
         venue: 'Main Hall',
+        timezone: 'Africa/Lagos',
         startsAt: new Date(Date.now() + 86_400_000).toISOString(),
       };
 
@@ -259,6 +264,8 @@ describe('EventsController', () => {
         ['an unknown category', { category: 'NOPE' }],
         ['a start date in the past', { startsAt: '2020-01-01T00:00:00.000Z' }],
         ['an out-of-range royalty', { royaltyBps: 5000 }],
+        ['an invalid image URL', { imageUrl: 'not-a-url' }],
+        ['an invalid timezone', { timezone: 'Lagos' }],
         ['an unknown field', { bogus: true }],
       ])('rejects %s', async (_label, patch) => {
         await http()
@@ -308,6 +315,51 @@ describe('EventsController', () => {
           .send({ ...body, ...patch })
           .expect(400);
         expect(service.addTicketType).not.toHaveBeenCalled();
+      });
+    });
+
+    describe('PATCH /events/:eventId/ticket-types/:ticketTypeId', () => {
+      it('updates total inventory for the caller', async () => {
+        service.updateTicketType.mockResolvedValue({
+          id: 't1',
+          quantityTotal: 75,
+        });
+
+        await http()
+          .patch('/events/e1/ticket-types/t1')
+          .set(AUTH)
+          .send({ quantityTotal: 75 })
+          .expect(200);
+
+        expect(service.updateTicketType).toHaveBeenCalledWith(
+          TEST_USER.userId,
+          'e1',
+          't1',
+          expect.objectContaining({ quantityTotal: 75 }),
+        );
+      });
+
+      it('rejects invalid totals and propagates inventory conflicts', async () => {
+        await http()
+          .patch('/events/e1/ticket-types/t1')
+          .set(AUTH)
+          .send({ quantityTotal: 0 })
+          .expect(400);
+        expect(service.updateTicketType).not.toHaveBeenCalled();
+
+        service.updateTicketType.mockRejectedValue(
+          new ConflictException(
+            'quantityTotal cannot be lower than quantityIssued',
+          ),
+        );
+        const res = await http()
+          .patch('/events/e1/ticket-types/t1')
+          .set(AUTH)
+          .send({ quantityTotal: 9 })
+          .expect(409);
+        expect((res.body as { message: string }).message).toBe(
+          'quantityTotal cannot be lower than quantityIssued',
+        );
       });
     });
 

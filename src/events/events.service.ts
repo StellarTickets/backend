@@ -17,6 +17,7 @@ import { toSkipTake } from '../common/pagination/paginated';
 import { CreateEventDto } from './dto/create-event.dto';
 import { ListPublishedEventsQueryDto } from './dto/list-published-events-query.dto';
 import { CreateTicketTypeDto } from './dto/create-ticket-type.dto';
+import { UpdateTicketTypeDto } from './dto/update-ticket-type.dto';
 import { CACHE_STORE } from '../common/cache/cache-store';
 import { Inject } from '@nestjs/common';
 import { formatPrice } from '../common/utils/currency';
@@ -69,8 +70,11 @@ export class EventsService {
         data: {
           organizationId,
           name: dto.name,
+          description: dto.description,
+          imageUrl: dto.imageUrl,
           category: dto.category,
           venue: dto.venue,
+          timezone: dto.timezone,
           startsAt: dto.startsAt,
           endsAt: dto.endsAt,
           maxResaleMultiplierBps:
@@ -136,6 +140,47 @@ export class EventsService {
       },
     });
     return this.withTicketTypePricing(ticketType);
+  }
+
+  async updateTicketType(
+    userId: string,
+    eventId: string,
+    ticketTypeId: string,
+    dto: UpdateTicketTypeDto,
+  ) {
+    const ticketType = await this.prisma.ticketType.findFirst({
+      where: { id: ticketTypeId, eventId },
+      include: { event: { select: { organizationId: true } } },
+    });
+    if (!ticketType) {
+      throw new NotFoundException('Ticket type not found');
+    }
+    await this.organizations.assertMember(
+      ticketType.event.organizationId,
+      userId,
+    );
+
+    // Keep the comparison and write in one statement so concurrent issuance
+    // cannot make quantityTotal smaller than quantityIssued between them.
+    const { count } = await this.prisma.ticketType.updateMany({
+      where: {
+        id: ticketTypeId,
+        eventId,
+        quantityIssued: { lte: dto.quantityTotal },
+      },
+      data: { quantityTotal: dto.quantityTotal },
+    });
+    if (count === 0) {
+      throw new ConflictException(
+        'quantityTotal cannot be lower than quantityIssued',
+      );
+    }
+
+    const updated = await this.prisma.ticketType.findUniqueOrThrow({
+      where: { id: ticketTypeId },
+    });
+    await this.invalidateCache();
+    return this.withTicketTypePricing(updated);
   }
 
   /** Step 1 of publishing: returns an unsigned XDR for the organizer's wallet to sign. */

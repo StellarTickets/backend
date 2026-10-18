@@ -154,6 +154,7 @@ the matching "confirm" endpoint accepts the signed XDR back.
 | Method & path | Purpose |
 |---|---|
 | `GET /v1/users/me` | Current user's profile |
+| `PATCH /v1/users/me` | Update the current user's display name |
 | `PATCH /v1/users/me/wallet` | Link/update the caller's Stellar public key |
 | `GET /v1/users/lookup` | Look up a user (e.g. by email) for transfers |
 
@@ -180,8 +181,9 @@ the matching "confirm" endpoint accepts the signed XDR back.
 | `GET /v1/events` | Public marketplace listing |
 | `GET /v1/events/:eventId` | Event detail |
 | `GET /v1/organizations/:organizationId/events` | Events under an organization |
-| `POST /v1/organizations/:organizationId/events` | Create a draft event |
+| `POST /v1/organizations/:organizationId/events` | Create a draft event with description, image, and venue timezone |
 | `POST /v1/events/:eventId/ticket-types` | Add a ticket type (name, price, quantity) to a draft event |
+| `PATCH /v1/events/:eventId/ticket-types/:ticketTypeId` | Update ticket inventory without dropping below issued quantity |
 | `POST /v1/events/:eventId/publish` | **build** — unsigned XDR for the on-chain `create_event` call |
 | `POST /v1/events/:eventId/confirm-publish` | **confirm** — submits the signed XDR, sets `chainEventId` and `status: PUBLISHED` |
 

@@ -5,6 +5,7 @@ import {
   Get,
   Header,
   Param,
+  Patch,
   Post,
   Query,
   UseGuards,
@@ -17,6 +18,7 @@ import type { CurrentUserPayload } from '../auth/decorators/current-user.decorat
 import { EventsService } from './events.service';
 import { CreateEventDto } from './dto/create-event.dto';
 import { CreateTicketTypeDto } from './dto/create-ticket-type.dto';
+import { UpdateTicketTypeDto } from './dto/update-ticket-type.dto';
 import { ConfirmPublishDto } from './dto/confirm-publish.dto';
 import { PaginatedResponseInterceptor } from '../common/interceptors/paginated-response.interceptor';
 import { ListOrganizationEventsQueryDto } from './dto/list-organization-events-query.dto';
@@ -94,6 +96,22 @@ export class EventsController {
     @Body() dto: CreateTicketTypeDto,
   ) {
     return this.eventsService.addTicketType(user.userId, eventId, dto);
+  }
+
+  @Patch('events/:eventId/ticket-types/:ticketTypeId')
+  @UseGuards(JwtAuthGuard)
+  updateTicketType(
+    @CurrentUser() user: CurrentUserPayload,
+    @Param('eventId') eventId: string,
+    @Param('ticketTypeId') ticketTypeId: string,
+    @Body() dto: UpdateTicketTypeDto,
+  ) {
+    return this.eventsService.updateTicketType(
+      user.userId,
+      eventId,
+      ticketTypeId,
+      dto,
+    );
   }
 
   @Post('events/:eventId/publish')

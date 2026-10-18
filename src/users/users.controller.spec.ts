@@ -19,6 +19,7 @@ describe('UsersController', () => {
   let app: INestApplication;
   const service = {
     findMe: jest.fn(),
+    updateProfile: jest.fn(),
     connectWallet: jest.fn(),
     lookupByEmail: jest.fn(),
   };
@@ -34,6 +35,7 @@ describe('UsersController', () => {
 
   it.each([
     ['get', '/users/me'],
+    ['patch', '/users/me'],
     ['patch', '/users/me/wallet'],
     ['get', '/users/lookup?email=a@b.co'],
   ] as const)('rejects unauthenticated %s %s', async (method, url) => {
@@ -53,6 +55,39 @@ describe('UsersController', () => {
   it('GET /me propagates not-found', async () => {
     service.findMe.mockRejectedValue(new NotFoundException('User not found'));
     await request(server(app)).get('/users/me').set(AUTH).expect(404);
+  });
+
+  it('PATCH /me trims and updates the current user name', async () => {
+    service.updateProfile.mockResolvedValue({
+      id: TEST_USER.userId,
+      name: 'Ada Lovelace',
+    });
+
+    const res = await request(server(app))
+      .patch('/users/me')
+      .set(AUTH)
+      .send({ name: '  Ada Lovelace  ' })
+      .expect(200);
+
+    expect((res.body as { name: string }).name).toBe('Ada Lovelace');
+    expect(service.updateProfile).toHaveBeenCalledWith(
+      TEST_USER.userId,
+      'Ada Lovelace',
+    );
+  });
+
+  it.each([
+    ['an empty name', { name: '   ' }],
+    ['a name over 256 characters', { name: 'a'.repeat(257) }],
+    ['a missing name', {}],
+    ['an unknown field', { name: 'Ada', email: 'new@example.com' }],
+  ])('PATCH /me rejects %s', async (_label, body) => {
+    await request(server(app))
+      .patch('/users/me')
+      .set(AUTH)
+      .send(body)
+      .expect(400);
+    expect(service.updateProfile).not.toHaveBeenCalled();
   });
 
   it('PATCH /me/wallet connects a valid wallet', async () => {
