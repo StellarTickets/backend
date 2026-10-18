@@ -233,7 +233,10 @@ is safe. It creates:
 - **alice@example.com** (attendee) and **organiser@example.com** (organiser),
   both with password `Password123!`
 - A demo organisation **Stellar Events Demo**
-- A draft event **StellarFest 2027** with General Admission and VIP ticket types
+- A published event **StellarFest 2027** with General Admission and VIP ticket types
+
+The production Docker image runs as the unprivileged `appuser` account rather
+than root.
 
 Seed data can be wiped and recreated with:
 
