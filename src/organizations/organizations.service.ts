@@ -9,6 +9,7 @@ import { OrgMemberRole, UserRole } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { CreateOrganizationDto } from './dto/create-organization.dto';
+import { UpdateOrganizationDto } from './dto/update-organization.dto';
 
 @Injectable()
 export class OrganizationsService {
@@ -78,6 +79,38 @@ export class OrganizationsService {
     return org;
   }
 
+  /** Edits an organization's mutable fields. Only OWNER/ADMIN members may update; `slug` is immutable. */
+  async update(userId: string, id: string, dto: UpdateOrganizationDto) {
+    await this.findOne(id);
+    await this.assertRole(id, userId, [
+      OrgMemberRole.OWNER,
+      OrgMemberRole.ADMIN,
+    ]);
+    const org = await this.prisma.organization.update({
+      where: { id },
+      // Fields are listed explicitly so `slug` can never be written here.
+      data: {
+        name: dto.name,
+        industry: dto.industry,
+        stellarAccount: dto.stellarAccount,
+        logoUrl: dto.logoUrl,
+        websiteUrl: dto.websiteUrl,
+        defaultMaxResaleMultiplierBps: dto.defaultMaxResaleMultiplierBps,
+        defaultRoyaltyBps: dto.defaultRoyaltyBps,
+      },
+    });
+    await this.audit?.record(
+      userId,
+      'organization.update',
+      'Organization',
+      id,
+      {
+        fields: Object.keys(dto),
+      },
+    );
+    return org;
+  }
+
   /** #207 — soft-delete: sets `deletedAt` instead of hard-deleting. */
   async softDelete(userId: string, id: string) {
     await this.findOne(id);
@@ -143,6 +176,25 @@ export class OrganizationsService {
     });
     if (!membership) {
       throw new ForbiddenException('You are not a member of this organization');
+    }
+  }
+
+  /** Throws unless `userId` holds one of `roles` in `organizationId`. */
+  async assertRole(
+    organizationId: string,
+    userId: string,
+    roles: OrgMemberRole[],
+  ): Promise<void> {
+    const membership = await this.prisma.organizationMember.findUnique({
+      where: { organizationId_userId: { organizationId, userId } },
+    });
+    if (!membership) {
+      throw new ForbiddenException('You are not a member of this organization');
+    }
+    if (!roles.includes(membership.role)) {
+      throw new ForbiddenException(
+        'Only organization owners and admins can perform this action',
+      );
     }
   }
 }

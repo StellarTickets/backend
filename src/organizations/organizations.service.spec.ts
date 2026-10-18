@@ -128,6 +128,69 @@ describe('OrganizationsService', () => {
     });
   });
 
+  describe('update', () => {
+    beforeEach(() => {
+      prisma.organization.findUnique.mockResolvedValue(
+        createOrganization({ id: 'org-1', deletedAt: null }),
+      );
+      prisma.organization.update.mockResolvedValue({ id: 'org-1' });
+    });
+
+    it.each(['OWNER', 'ADMIN'])(
+      'lets an %s update the organization',
+      async (role) => {
+        prisma.organizationMember.findUnique.mockResolvedValue({ role });
+
+        await service.update('user-1', 'org-1', { name: 'Renamed Org' });
+
+        expect(prisma.organization.update).toHaveBeenCalledWith({
+          where: { id: 'org-1' },
+          data: expect.objectContaining({ name: 'Renamed Org' }) as object,
+        });
+      },
+    );
+
+    it('rejects a STAFF member', async () => {
+      prisma.organizationMember.findUnique.mockResolvedValue({ role: 'STAFF' });
+
+      await expect(
+        service.update('user-1', 'org-1', { name: 'Renamed Org' }),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+      expect(prisma.organization.update).not.toHaveBeenCalled();
+    });
+
+    it('rejects a non-member', async () => {
+      prisma.organizationMember.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.update('user-1', 'org-1', { name: 'Renamed Org' }),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+      expect(prisma.organization.update).not.toHaveBeenCalled();
+    });
+
+    it('throws NotFoundException for a missing organization', async () => {
+      prisma.organization.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.update('user-1', 'missing', { name: 'Renamed Org' }),
+      ).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('never writes the slug, even if one slips through', async () => {
+      prisma.organizationMember.findUnique.mockResolvedValue({ role: 'OWNER' });
+
+      await service.update('user-1', 'org-1', {
+        name: 'Renamed Org',
+        slug: 'hijacked',
+      } as never);
+
+      const [[{ data }]] = prisma.organization.update.mock.calls as [
+        [{ data: Record<string, unknown> }],
+      ];
+      expect(data).not.toHaveProperty('slug');
+    });
+  });
+
   describe('soft-delete (#207)', () => {
     it('soft-deletes by setting deletedAt instead of hard-deleting', async () => {
       prisma.organization.findUnique.mockResolvedValue(
