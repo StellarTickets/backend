@@ -21,6 +21,7 @@ describe('EventsController', () => {
   let app: INestApplication;
   const service = {
     findPublished: jest.fn(),
+    getBySlug: jest.fn(),
     getWithOrg: jest.fn(),
     getWithReconciliation: jest.fn(),
     findForOrganization: jest.fn(),
@@ -126,6 +127,20 @@ describe('EventsController', () => {
       );
       const res = await http().get('/events/nope').expect(404);
       expect((res.body as { message: string }).message).toBe('Event not found');
+    });
+
+    it('GET /events/slug/:slug returns an event and propagates not-found', async () => {
+      service.getBySlug.mockResolvedValueOnce({
+        id: 'e1',
+        slug: 'launch-night',
+      });
+      await http().get('/events/slug/launch-night').expect(200);
+      expect(service.getBySlug).toHaveBeenCalledWith('launch-night', undefined);
+
+      service.getBySlug.mockRejectedValueOnce(
+        new NotFoundException('Event not found'),
+      );
+      await http().get('/events/slug/missing').expect(404);
     });
 
     it('GET /events/:eventId forwards the reconcile flag', async () => {

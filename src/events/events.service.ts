@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import {
   BadRequestException,
   ConflictException,
@@ -27,6 +27,17 @@ import type { SettlementAsset } from '../config/settlement-asset';
 /** On-chain existence derived from `StellarService.getEvent`, reported alongside the cached DB `status` when reconciliation is requested. */
 export type OnChainReconciliationStatus =
   'PUBLISHED' | 'NOT_FOUND' | 'NOT_PUBLISHED';
+
+function createEventSlug(name: string, startsAt: Date, id: string): string {
+  const nameSlug =
+    name
+      .normalize('NFKD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-|-$/g, '') || 'event';
+  return `${nameSlug}-${startsAt.toISOString().slice(0, 10)}-${id}`;
+}
 
 function hasPricedTicketTypes<T extends object>(
   event: T,
@@ -66,10 +77,13 @@ export class EventsService {
     const org = await this.organizations.findOne(organizationId);
 
     const event = await this.prisma.$transaction(async (tx) => {
+      const id = randomUUID();
       const created = await tx.event.create({
         data: {
+          id,
           organizationId,
           name: dto.name,
+          slug: createEventSlug(dto.name, dto.startsAt, id),
           description: dto.description,
           imageUrl: dto.imageUrl,
           category: dto.category,
@@ -326,6 +340,23 @@ export class EventsService {
       ...event,
       onChainStatus: await this.getOnChainStatus(event),
     });
+  }
+
+  async getBySlug(slug: string, viewerId?: string) {
+    const event = await this.prisma.event.findUnique({
+      where: { slug },
+      include: { organization: true },
+    });
+    if (!event || (event as { deletedAt?: Date | null }).deletedAt) {
+      throw new NotFoundException('Event not found');
+    }
+    if (
+      event.status !== EventStatus.PUBLISHED &&
+      !(await this.canView(event, viewerId))
+    ) {
+      throw new NotFoundException('Event not found');
+    }
+    return this.withEventPricing(event);
   }
 
   /** A viewer may see a non-published event only if they belong to its organization. */

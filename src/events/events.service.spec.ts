@@ -146,6 +146,10 @@ describe('EventsService', () => {
       expect(prisma.event.create).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({
+            id: expect.any(String),
+            slug: expect.stringMatching(
+              /^radiohead-live-\d{4}-\d{2}-\d{2}-[0-9a-f-]{36}$/,
+            ),
             description: 'A live performance.',
             imageUrl: 'https://example.com/radiohead.jpg',
             timezone: 'Europe/London',
@@ -785,6 +789,42 @@ describe('EventsService', () => {
         expect(event.status).toBe('PUBLISHED');
         expect(organizations.isMember).not.toHaveBeenCalled();
       });
+    });
+  });
+
+  describe('getBySlug', () => {
+    it('returns a published event looked up by its slug', async () => {
+      prisma.event.findUnique.mockResolvedValue({
+        id: 'event-1',
+        slug: 'radiohead-live-2026-12-01',
+        status: 'PUBLISHED',
+        chainEventId: null,
+        organization: { stellarAccount: 'GORG' },
+      });
+
+      await expect(
+        service.getBySlug('radiohead-live-2026-12-01'),
+      ).resolves.toMatchObject({
+        id: 'event-1',
+        slug: 'radiohead-live-2026-12-01',
+      });
+      expect(prisma.event.findUnique).toHaveBeenCalledWith({
+        where: { slug: 'radiohead-live-2026-12-01' },
+        include: { organization: true },
+      });
+    });
+
+    it('hides drafts from anonymous callers', async () => {
+      prisma.event.findUnique.mockResolvedValue({
+        id: 'event-1',
+        status: 'DRAFT',
+        organizationId: 'org-1',
+        organization: { stellarAccount: 'GORG' },
+      });
+
+      await expect(
+        service.getBySlug('radiohead-live'),
+      ).rejects.toMatchObject({ status: 404 });
     });
   });
 
