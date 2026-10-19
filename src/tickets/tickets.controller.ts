@@ -16,7 +16,6 @@ import type { Response } from 'express';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import type { CurrentUserPayload } from '../auth/decorators/current-user.decorator';
-import { TicketStatus } from '@prisma/client';
 import { ScanRateLimitGuard } from '../common/guards/scan-rate-limit.guard';
 import { IdempotencyInterceptor } from '../common/interceptors/idempotency.interceptor';
 import { TicketsService } from './tickets.service';
@@ -32,6 +31,7 @@ import { ListForResaleDto } from './dto/list-for-resale.dto';
 import { ConfirmListForResaleDto } from './dto/confirm-list-for-resale.dto';
 import { UpdateResalePriceDto } from './dto/update-resale-price.dto';
 import { ResaleListingsQueryDto } from './dto/resale-listings-query.dto';
+import { MyTicketsQueryDto } from './dto/my-tickets-query.dto';
 import { RevokeBatchDto } from './dto/revoke-batch.dto';
 import { IssueBatchDto } from './dto/issue-batch.dto';
 
@@ -60,9 +60,9 @@ export class TicketsController {
   @Get('mine')
   findMine(
     @CurrentUser() user: CurrentUserPayload,
-    @Query('status') status?: TicketStatus,
+    @Query() query: MyTicketsQueryDto,
   ) {
-    return this.ticketsService.findMine(user.userId, status);
+    return this.ticketsService.findMine(user.userId, query.status);
   }
 
   @Get('verify/:qrSecret')

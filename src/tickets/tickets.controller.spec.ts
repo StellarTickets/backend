@@ -188,6 +188,15 @@ describe('TicketsController', () => {
       expect(service.findMine).toHaveBeenCalledWith(uid, 'VALID');
     });
 
+    it('GET /mine rejects an unknown status', async () => {
+      await http()
+        .get('/tickets/mine')
+        .query({ status: 'EXPIRED' })
+        .set(AUTH)
+        .expect(400);
+      expect(service.findMine).not.toHaveBeenCalled();
+    });
+
     it('GET /verify/:qrSecret verifies as the caller', async () => {
       service.verify.mockResolvedValue({ valid: true });
       await http().get('/tickets/verify/s3cret').set(AUTH).expect(200);
@@ -382,7 +391,9 @@ describe('TicketsController', () => {
 
     it('POST /confirm-issue returns 409 when the seat is already taken for the event (#135)', async () => {
       service.confirmIssue.mockRejectedValue(
-        new ConflictException('That seat has already been issued for this event'),
+        new ConflictException(
+          'That seat has already been issued for this event',
+        ),
       );
       const res = await http()
         .post('/tickets/confirm-issue')
@@ -400,9 +411,20 @@ describe('TicketsController', () => {
     const body = { ticketTypeId: UUID, recipients: [recipient] };
 
     it('POST /issue-batch forwards ticketTypeId and recipients to the service', async () => {
-      service.buildIssueBatch.mockResolvedValue({ total: 1, succeeded: 1, failed: 0, results: [] });
-      await http().post('/tickets/issue-batch').set(AUTH).send(body).expect(201);
-      expect(service.buildIssueBatch).toHaveBeenCalledWith(uid, UUID, [recipient]);
+      service.buildIssueBatch.mockResolvedValue({
+        total: 1,
+        succeeded: 1,
+        failed: 0,
+        results: [],
+      });
+      await http()
+        .post('/tickets/issue-batch')
+        .set(AUTH)
+        .send(body)
+        .expect(201);
+      expect(service.buildIssueBatch).toHaveBeenCalledWith(uid, UUID, [
+        recipient,
+      ]);
     });
 
     it('POST /issue-batch rejects a non-UUID ticketTypeId', async () => {
@@ -427,14 +449,19 @@ describe('TicketsController', () => {
       await http()
         .post('/tickets/issue-batch')
         .set(AUTH)
-        .send({ ticketTypeId: UUID, recipients: [{ toUserId: UUID2, toPublicKey: 'bad' }] })
+        .send({
+          ticketTypeId: UUID,
+          recipients: [{ toUserId: UUID2, toPublicKey: 'bad' }],
+        })
         .expect(400);
       expect(service.buildIssueBatch).not.toHaveBeenCalled();
     });
 
     it('POST /issue-batch returns 400 when the batch exceeds the configured max size', async () => {
       service.buildIssueBatch.mockRejectedValue(
-        new BadRequestException('Batch size exceeds the maximum of 50 recipients'),
+        new BadRequestException(
+          'Batch size exceeds the maximum of 50 recipients',
+        ),
       );
       const bigBatch = Array.from({ length: 51 }, () => recipient);
       const res = await http()
@@ -442,7 +469,9 @@ describe('TicketsController', () => {
         .set(AUTH)
         .send({ ticketTypeId: UUID, recipients: bigBatch })
         .expect(400);
-      expect((res.body as { message: string }).message).toContain('Batch size exceeds');
+      expect((res.body as { message: string }).message).toContain(
+        'Batch size exceeds',
+      );
     });
   });
 
