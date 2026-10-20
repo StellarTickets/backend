@@ -37,6 +37,16 @@ export class EventsController {
     return this.eventsService.findPublished(query);
   }
 
+  @Get('events/slug/:slug')
+  @UseGuards(OptionalJwtAuthGuard)
+  @UseInterceptors(ResponseCacheInterceptor)
+  findBySlug(
+    @Param('slug') slug: string,
+    @CurrentUser() user: CurrentUserPayload | undefined,
+  ) {
+    return this.eventsService.getBySlug(slug, user?.userId);
+  }
+
   @Get('events/:eventId')
   @UseGuards(OptionalJwtAuthGuard)
   @UseInterceptors(ResponseCacheInterceptor)

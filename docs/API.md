@@ -83,7 +83,8 @@ parsing, not database work.
 version `1`).
 
 **Authentication.** Everything except `/v1/health`, `/v1/industries`,
-`/v1/auth/*`, `GET /v1/events`, `GET /v1/events/:eventId` and
+`/v1/auth/*`, `GET /v1/events`, `GET /v1/events/slug/:slug`,
+`GET /v1/events/:eventId` and
 `/v1/stellar/*` needs `Authorization: Bearer <JWT>`. Scanner devices
 authenticate `POST /v1/tickets/:ticketId/scanner-check-in` with their own
 device token instead (see that route).
@@ -536,6 +537,7 @@ curl -s "$API/v1/events?q=jazz&category=CONCERTS&from=2026-11-01T00:00:00Z&to=20
   {
     "id": "7a1f3c5e-9b2d-4e6f-8a0c-1d2e3f4a5b6c",
     "name": "Launch Night",
+    "slug": "launch-night-2026-12-01-7a1f3c5e-9b2d-4e6f-8a0c-1d2e3f4a5b6c",
     "description": "A night of live music at The Fillmore.",
     "imageUrl": "https://cdn.example.com/launch-night.jpg",
     "timezone": "America/Los_Angeles",
@@ -554,6 +556,17 @@ curl -s "$API/v1/events?q=jazz&category=CONCERTS&from=2026-11-01T00:00:00Z&to=20
 
 (Other event columns omitted here for brevity; the response carries the
 full row.)
+
+### `GET /v1/events/slug/:slug`
+
+Looks up an event using its shareable slug, generated from its name and start
+date. Published events are public; non-published events are visible only to
+members of their owning organization. Missing, deleted, and unauthorized
+events return `404`.
+
+```bash
+curl -s "$API/v1/events/slug/launch-night-2026-12-01-7a1f3c5e-9b2d-4e6f-8a0c-1d2e3f4a5b6c"
+```
 
 ### `GET /v1/events/:eventId`
 

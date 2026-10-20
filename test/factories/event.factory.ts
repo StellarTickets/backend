@@ -6,10 +6,12 @@ let ticketTypeCounter = 0;
 /** Returns a fully-valid `Event` row, with realistic defaults, merged with `overrides`. */
 export function createEvent(overrides: Partial<Event> = {}): Event {
   const n = ++eventCounter;
+  const id = overrides.id ?? `event-${n}`;
   return {
-    id: `event-${n}`,
+    id,
     organizationId: `org-${n}`,
     name: `Test Event ${n}`,
+    slug: `test-event-${n}-${id}`,
     description: `Description for test event ${n}`,
     imageUrl: null,
     category: 'CONCERTS',

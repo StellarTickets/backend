@@ -92,6 +92,7 @@ async function main() {
       data: {
         organizationId: org.id,
         name: 'StellarFest 2027',
+        slug: 'stellarfest-2027-03-15-demo',
         description: 'A demo concert powered by StellarTickets.',
         imageUrl: null,
         category: Industry.CONCERTS,
