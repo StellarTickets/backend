@@ -53,7 +53,7 @@
     "@opentelemetry/instrumentation-express": "^0.70.0",
     "@opentelemetry/instrumentation-http": "^0.222.0",
     "@opentelemetry/instrumentation-nestjs-core": "^0.68.0",
-    "@opentelemetry/sdk-node": "^0.222.0",
+    "@opentelemetry/sdk-node": "^0.300.0",
     "@prisma/client": "6.19.3",
     "@stellar/stellar-sdk": "^16.2.0",
     "bcrypt": "^6.0.0",
