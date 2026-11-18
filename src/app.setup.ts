@@ -1,4 +1,4 @@
-import { ValidationPipe, VersioningType } from '@nestjs/common';
+import { Logger, ValidationPipe, VersioningType } from '@nestjs/common';
 import type { ConfigService } from '@nestjs/config';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { json } from 'express';
@@ -24,7 +24,14 @@ export function configureApp(
 
   // Resolve `req.ip` from X-Forwarded-For only for proxies we trust —
   // see docs/DEPLOYMENT.md.
-  app.set('trust proxy', parseTrustProxy(config.get<string>('TRUST_PROXY')));
+  const trustProxy = parseTrustProxy(config.get<string>('TRUST_PROXY'));
+  app.set('trust proxy', trustProxy);
+  if (trustProxy === false) {
+    Logger.warn(
+      'TRUST_PROXY is unset or false. Behind a load balancer this causes all clients to share the proxy IP for rate limiting and logging. See docs/DEPLOYMENT.md#6-running-behind-a-proxy-trust_proxy.',
+      'TrustProxy',
+    );
+  }
   // Weak ETags on GET responses; Express answers a matching
   // If-None-Match with 304 Not Modified. See docs/API.md.
   app.set('etag', 'weak');
