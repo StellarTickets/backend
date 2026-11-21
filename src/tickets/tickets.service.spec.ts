@@ -959,7 +959,10 @@ describe('TicketsService', () => {
         chainTicketId: 7n,
         status: 'VALID',
         chainTicketId: 7n,
-        event: { organizationId: 'org-1', organization: { stellarAccount: 'GORG' } },
+        event: {
+          organizationId: 'org-1',
+          organization: { stellarAccount: 'GORG' },
+        },
       });
 
       const token = await service.getOfflineToken('staff-1', 'ticket-1');
@@ -995,7 +998,10 @@ describe('TicketsService', () => {
         chainTicketId: 7n,
         status: 'VALID',
         chainTicketId: 7n,
-        event: { organizationId: 'org-1', organization: { stellarAccount: 'GORG' } },
+        event: {
+          organizationId: 'org-1',
+          organization: { stellarAccount: 'GORG' },
+        },
       });
       organizations.assertMember.mockRejectedValueOnce(
         new ForbiddenException('You are not a member of this organization'),
@@ -1956,6 +1962,63 @@ describe('TicketsService', () => {
       );
     });
 
+    it('cancels the revoked tickets’ ACTIVE resale listings in the same transaction (#500)', async () => {
+      prisma.event.findUnique.mockResolvedValue({
+        id: 'event-1',
+        organizationId: 'org-1',
+        organization: { stellarAccount: 'GORGANIZER' },
+      });
+      prisma.ticket.findMany.mockResolvedValue([
+        { id: 'ticket-1', eventId: 'event-1' },
+        { id: 'ticket-2', eventId: 'event-1' },
+      ]);
+      prisma.ticket.updateMany.mockResolvedValue({ count: 2 });
+      prisma.resaleListing.updateMany.mockResolvedValue({ count: 2 });
+
+      const result = await service.revokeBatch('user-1', 'event-1', [
+        'ticket-1',
+        'ticket-2',
+      ]);
+
+      expect(result.count).toBe(2);
+      // Both writes must happen inside one transaction so a revoked ticket
+      // can never be left with an ACTIVE listing on the marketplace.
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+      expect(prisma.resaleListing.updateMany).toHaveBeenCalledWith({
+        where: {
+          ticketId: { in: ['ticket-1', 'ticket-2'] },
+          status: 'ACTIVE',
+        },
+        data: { status: 'CANCELLED' },
+      });
+      expect(prisma.ticket.updateMany).toHaveBeenCalledWith({
+        where: { id: { in: ['ticket-1', 'ticket-2'] } },
+        data: { status: 'REVOKED' },
+      });
+    });
+
+    it('does not touch non-ACTIVE listings of revoked tickets (#500)', async () => {
+      prisma.event.findUnique.mockResolvedValue({
+        id: 'event-1',
+        organizationId: 'org-1',
+        organization: { stellarAccount: 'GORGANIZER' },
+      });
+      prisma.ticket.findMany.mockResolvedValue([
+        { id: 'ticket-1', eventId: 'event-1' },
+      ]);
+      prisma.ticket.updateMany.mockResolvedValue({ count: 1 });
+      prisma.resaleListing.updateMany.mockResolvedValue({ count: 0 });
+
+      await service.revokeBatch('user-1', 'event-1', ['ticket-1']);
+
+      // The status filter in the where clause keeps SOLD/CANCELLED listings
+      // untouched — only ACTIVE ones are cancelled.
+      expect(prisma.resaleListing.updateMany).toHaveBeenCalledWith({
+        where: { ticketId: { in: ['ticket-1'] }, status: 'ACTIVE' },
+        data: { status: 'CANCELLED' },
+      });
+    });
+
     it('rejects batch exceeding max size', async () => {
       const ticketIds = Array.from({ length: 101 }, (_, i) => `ticket-${i}`);
 
@@ -2227,7 +2290,10 @@ describe('TicketsService', () => {
         eventId: 'event-1',
         ownerId: 'owner-1',
         chainTicketId: 7n,
-        event: { organizationId: 'org-1', organization: { stellarAccount: 'GORG' } },
+        event: {
+          organizationId: 'org-1',
+          organization: { stellarAccount: 'GORG' },
+        },
       });
 
       await expect(
@@ -2244,7 +2310,10 @@ describe('TicketsService', () => {
         eventId: 'event-1',
         ownerId: 'owner-1',
         chainTicketId: 7n,
-        event: { organizationId: 'org-1', organization: { stellarAccount: 'GORG' } },
+        event: {
+          organizationId: 'org-1',
+          organization: { stellarAccount: 'GORG' },
+        },
       });
 
       await expect(
@@ -2296,7 +2365,10 @@ describe('TicketsService', () => {
       eventId: 'event-1',
       ownerId: 'owner-1',
       chainTicketId: 7n,
-      event: { organizationId: 'org-1', organization: { stellarAccount: 'GORG' } },
+      event: {
+        organizationId: 'org-1',
+        organization: { stellarAccount: 'GORG' },
+      },
     };
 
     it('returns the stored response without re-submitting or re-writing', async () => {
@@ -2308,7 +2380,11 @@ describe('TicketsService', () => {
       });
       prisma.ticket.findUnique.mockResolvedValue(ticketRow);
 
-      const result = await service.confirmCheckIn('user-1', 'ticket-1', 'signed-xdr');
+      const result = await service.confirmCheckIn(
+        'user-1',
+        'ticket-1',
+        'signed-xdr',
+      );
 
       expect(result).toEqual(stored);
       expect(prisma.processedTx.findUnique).toHaveBeenCalledWith({
@@ -2346,7 +2422,10 @@ describe('TicketsService', () => {
         eventId: 'event-1',
         ownerId: 'owner-1',
         chainTicketId: 7n,
-        event: { organizationId: 'org-1', organization: { stellarAccount: 'GORG' } },
+        event: {
+          organizationId: 'org-1',
+          organization: { stellarAccount: 'GORG' },
+        },
       });
       prisma.ticket.update.mockResolvedValue({
         id: 'ticket-1',
@@ -2376,7 +2455,10 @@ describe('TicketsService', () => {
         eventId: 'event-1',
         ownerId: 'owner-1',
         chainTicketId: 7n,
-        event: { organizationId: 'org-1', organization: { stellarAccount: 'GORG' } },
+        event: {
+          organizationId: 'org-1',
+          organization: { stellarAccount: 'GORG' },
+        },
       });
       prisma.ticket.update.mockResolvedValue({
         id: 'ticket-1',
