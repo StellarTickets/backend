@@ -55,6 +55,28 @@ function hasPricedTicketTypes<T extends object>(
   );
 }
 
+// src/events/events.service.spec.ts
+describe('restore()', () => {
+  it('throws 409 and writes no audit row when the event is not deleted', async () => {
+    eventsRepository.findOne.mockResolvedValue({ id: '1', deletedAt: null });
+
+    await expect(service.restore('1', 'user-1')).rejects.toBeInstanceOf(ConflictException);
+
+    expect(eventsRepository.restore).not.toHaveBeenCalled();
+    expect(auditService.log).not.toHaveBeenCalled();
+  });
+
+  it('restores and audits when the event is deleted', async () => {
+    eventsRepository.findOne.mockResolvedValue({ id: '1', deletedAt: new Date() });
+    eventsRepository.findOneOrFail.mockResolvedValue({ id: '1', deletedAt: null });
+
+    await service.restore('1', 'user-1');
+
+    expect(eventsRepository.restore).toHaveBeenCalledWith('1');
+    expect(auditService.log).toHaveBeenCalledTimes(1);
+  });
+});
+
 @Injectable()
 export class EventsService {
   private readonly settlementAsset: SettlementAsset;
