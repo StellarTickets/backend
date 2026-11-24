@@ -22,6 +22,30 @@ describe('EventReminderService', () => {
     notifications = {
       sendEventReminder: jest.fn().mockResolvedValue(undefined),
     };
+    // src/events/events.service.ts
+import { ConflictException, NotFoundException } from '@nestjs/common';
+
+async restore(id: string, actorId: string): Promise<Event> {
+  // withDeleted so we can find soft-deleted rows
+  const event = await this.eventsRepository.findOne({
+    where: { id },
+    withDeleted: true,
+  });
+
+  if (!event) {
+    throw new NotFoundException(`Event ${id} not found`);
+  }
+
+  // No-op guard: must happen BEFORE any write or audit entry
+  if (!event.deletedAt) {
+    throw new ConflictException(`Event ${id} is not deleted`);
+  }
+
+  await this.eventsRepository.restore(id);
+  await this.auditService.log({ action: 'EVENT_RESTORED', entityId: id, actorId });
+
+  return this.eventsRepository.findOneOrFail({ where: { id } });
+}
 
     service = new EventReminderService(
       prisma as unknown as PrismaService,
