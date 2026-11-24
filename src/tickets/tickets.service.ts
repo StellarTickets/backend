@@ -591,12 +591,18 @@ export class TicketsService {
 
   // ---- Check-in ----
 
-  async buildCheckInTx(userId: string, ticketId: string) {
+  async buildCheckInTx(userId: string, ticketId: string, gateId?: string) {
     const ticket = await this.loadTicketForOrganizer(userId, { id: ticketId });
+    let zone: string | undefined;
+    if (gateId) {
+      const gate = await this.gates!.assertBelongsToEvent(gateId, ticket.eventId);
+      zone = (gate as { zone?: string | null }).zone ?? undefined;
+    }
 
     const unsignedXdr = await this.stellar.buildCheckInTx({
       organizerPublicKey: ticket.event.organization.stellarAccount,
       chainTicketId: ticket.chainTicketId,
+      zone,
     });
     return { unsignedXdr };
   }
@@ -611,19 +617,32 @@ export class TicketsService {
     const ticket = await this.loadTicketForOrganizer(userId, { id: ticketId });
     const replay = await this.findProcessedTx<Ticket>(signedXdr);
     if (replay) return replay.value;
-    this.assertSignedInvocation(signedXdr, 'check_in', [
+    let zone: string | undefined;
+    if (gateId) {
+      const gate = await this.gates!.assertBelongsToEvent(gateId, ticket.eventId);
+      zone = (gate as { zone?: string | null }).zone ?? undefined;
+    }
+    this.assertSignedInvocation(signedXdr, zone ? 'check_in_at_zone' : 'check_in', [
       ['organizer', 0, ticket.event.organization.stellarAccount],
       ['ticket', 1, ticket.chainTicketId],
+      ...(zone ? ([['zone', 2, zone]] as [string, number, unknown][]) : []),
     ]);
-    if (gateId) {
-      await this.gates!.assertBelongsToEvent(gateId, ticket.eventId);
-    }
     await this.stellar.submitSignedTransaction(signedXdr);
+    let status = TicketStatus.USED;
+    try {
+      const onChainTicket = await this.stellar.verifyTicket(ticket.chainTicketId);
+      status =
+        TICKET_STATUS_FOR_CHAIN[onChainTicket.status] ?? TicketStatus.USED;
+    } catch (err) {
+      this.logger.warn(
+        `Could not read on-chain ticket status after check-in for ${ticketId}: ${(err as Error).message}`,
+      );
+    }
     return this.prisma.$transaction(async (tx) => {
       const checkedIn = await tx.ticket.update({
         where: { id: ticketId },
         data: {
-          status: TicketStatus.USED,
+          status,
           checkedInAt: new Date(),
           checkedInGateId: gateId ?? null,
           checkInReason: reason ?? null,
@@ -640,11 +659,21 @@ export class TicketsService {
    * the event (`add_checkin_signer`); the contract accepts any registered
    * signer as the first argument.
    */
-  async buildCheckInTxByDevice(ticketId: string, device: DeviceSigner) {
+  async buildCheckInTxByDevice(
+    ticketId: string,
+    device: DeviceSigner,
+    gateId?: string,
+  ) {
     const ticket = await this.getTicketWithOrg(ticketId);
+    let zone: string | undefined;
+    if (gateId) {
+      const gate = await this.gates!.assertBelongsToEvent(gateId, ticket.eventId);
+      zone = (gate as { zone?: string | null }).zone ?? undefined;
+    }
     const unsignedXdr = await this.stellar.buildCheckInTx({
       organizerPublicKey: this.deviceSignerKey(device),
       chainTicketId: ticket.chainTicketId,
+      zone,
     });
     return { unsignedXdr };
   }
@@ -672,19 +701,32 @@ export class TicketsService {
     const signer = device?.signerRegisteredAt
       ? this.deviceSignerKey(device)
       : ticket.event.organization.stellarAccount;
-    this.assertSignedInvocation(signedXdr, 'check_in', [
+    let zone: string | undefined;
+    if (gateId) {
+      const gate = await this.gates!.assertBelongsToEvent(gateId, ticket.eventId);
+      zone = (gate as { zone?: string | null }).zone ?? undefined;
+    }
+    this.assertSignedInvocation(signedXdr, zone ? 'check_in_at_zone' : 'check_in', [
       ['signer', 0, signer],
       ['ticket', 1, ticket.chainTicketId],
+      ...(zone ? ([['zone', 2, zone]] as [string, number, unknown][]) : []),
     ]);
-    if (gateId) {
-      await this.gates!.assertBelongsToEvent(gateId, ticket.eventId);
-    }
     await this.stellar.submitSignedTransaction(signedXdr);
+    let status = TicketStatus.USED;
+    try {
+      const onChainTicket = await this.stellar.verifyTicket(ticket.chainTicketId);
+      status =
+        TICKET_STATUS_FOR_CHAIN[onChainTicket.status] ?? TicketStatus.USED;
+    } catch (err) {
+      this.logger.warn(
+        `Could not read on-chain ticket status after check-in for ${ticketId}: ${(err as Error).message}`,
+      );
+    }
     return this.prisma.$transaction(async (tx) => {
       const checkedIn = await tx.ticket.update({
         where: { id: ticketId },
         data: {
-          status: TicketStatus.USED,
+          status,
           checkedInAt: new Date(),
           checkedInGateId: gateId ?? null,
           checkInReason: reason ?? null,
@@ -1351,6 +1393,9 @@ export class TicketsService {
     const ticket = await this.getTicketWithOrg(ticketId);
     if (ticket.status !== TicketStatus.RESALE) {
       throw new ListingInactiveError();
+    }
+    if (ticket.ownerId === buyerId) {
+      throw new BadRequestException('Cannot buy your own listing');
     }
     const buyer = await this.getUserWithWallet(buyerId);
 

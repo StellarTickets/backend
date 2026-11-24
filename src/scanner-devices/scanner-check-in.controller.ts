@@ -15,10 +15,15 @@ export class ScannerCheckInController {
 
   /** #515 — an unsigned `check_in` for the device to sign with its own key. */
   @Post(':ticketId/scanner-check-in/build')
-  buildCheckIn(@Param('ticketId') ticketId: string, @Req() req: DeviceRequest) {
+  buildCheckIn(
+    @Param('ticketId') ticketId: string,
+    @Body() dto: ConfirmCheckInDto,
+    @Req() req: DeviceRequest,
+  ) {
     return this.ticketsService.buildCheckInTxByDevice(
       ticketId,
       req.scannerDevice,
+      dto.gateId,
     );
   }
 

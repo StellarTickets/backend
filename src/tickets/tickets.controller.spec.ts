@@ -614,8 +614,12 @@ describe('TicketsController', () => {
   describe('check-in', () => {
     it('POST /:ticketId/check-in builds the tx', async () => {
       service.buildCheckInTx.mockResolvedValue({ xdr: 'x' });
-      await http().post('/tickets/t1/check-in').set(AUTH).expect(201);
-      expect(service.buildCheckInTx).toHaveBeenCalledWith(uid, 't1');
+      await http()
+        .post('/tickets/t1/check-in')
+        .set(AUTH)
+        .send({ gateId: UUID })
+        .expect(201);
+      expect(service.buildCheckInTx).toHaveBeenCalledWith(uid, 't1', UUID);
     });
 
     it('POST /:ticketId/confirm-check-in forwards gate and reason', async () => {

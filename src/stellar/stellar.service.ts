@@ -17,6 +17,7 @@ import {
   encodeBuyResale,
   encodeCancelResale,
   encodeCheckIn,
+  encodeCheckInAtZone,
   encodeCreateEvent,
   encodeIssueTicket,
   encodeListForResale,
@@ -412,7 +413,19 @@ export class StellarService {
   buildCheckInTx(params: {
     organizerPublicKey: string;
     chainTicketId: bigint;
+    zone?: string;
   }): Promise<string> {
+    if (params.zone) {
+      return this.buildTx(
+        params.organizerPublicKey,
+        'check_in_at_zone',
+        encodeCheckInAtZone({
+          organizer: params.organizerPublicKey,
+          ticketId: params.chainTicketId,
+          zone: params.zone,
+        }),
+      );
+    }
     return this.buildTx(
       params.organizerPublicKey,
       'check_in',

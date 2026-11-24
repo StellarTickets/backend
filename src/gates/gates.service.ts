@@ -33,7 +33,9 @@ export class GatesService {
       );
     }
 
-    return this.prisma.gate.create({ data: { eventId, name: dto.name } });
+    return this.prisma.gate.create({
+      data: { eventId, name: dto.name, zone: dto.zone ?? null } as any,
+    });
   }
 
   async listForEvent(userId: string, eventId: string) {
