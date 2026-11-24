@@ -41,6 +41,7 @@ describe('TicketStatusReconciliationJob', () => {
   let job: TicketStatusReconciliationJob;
   let prisma: {
     ticket: { findMany: jest.Mock; updateMany: jest.Mock };
+    user: { findUnique: jest.Mock };
   };
   let stellar: { verifyTicket: jest.Mock };
   let scheduler: {
@@ -55,6 +56,7 @@ describe('TicketStatusReconciliationJob', () => {
         findMany: jest.fn(),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
+      user: { findUnique: jest.fn() },
     };
     stellar = { verifyTicket: jest.fn() };
     scheduler = {
@@ -98,21 +100,27 @@ describe('TicketStatusReconciliationJob', () => {
         id: 'ticket-drifted',
         chainTicketId: 1n,
         status: TicketStatus.VALID,
+        ownerId: 'owner-1',
+        owner: { stellarPublicKey: 'GOWNER1' },
       },
       {
         id: 'ticket-current',
         chainTicketId: 2n,
         status: TicketStatus.USED,
+        ownerId: 'owner-1',
+        owner: { stellarPublicKey: 'GOWNER1' },
       },
       {
         id: 'ticket-failed',
         chainTicketId: 3n,
         status: TicketStatus.VALID,
+        ownerId: 'owner-1',
+        owner: { stellarPublicKey: 'GOWNER1' },
       },
     ]);
     stellar.verifyTicket
-      .mockResolvedValueOnce({ status: 'Used' })
-      .mockResolvedValueOnce({ status: 'Used' })
+      .mockResolvedValueOnce({ status: 'Used', owner: 'GOWNER1' })
+      .mockResolvedValueOnce({ status: 'Used', owner: 'GOWNER1' })
       .mockRejectedValueOnce(new Error('RPC unavailable'));
 
     await expect(job.reconcileOnce()).resolves.toEqual({
@@ -123,7 +131,11 @@ describe('TicketStatusReconciliationJob', () => {
       failed: 1,
     });
     expect(prisma.ticket.updateMany).toHaveBeenCalledWith({
-      where: { id: 'ticket-drifted', status: TicketStatus.VALID },
+      where: {
+        id: 'ticket-drifted',
+        status: TicketStatus.VALID,
+        ownerId: 'owner-1',
+      },
       data: { status: TicketStatus.USED },
     });
     expect(log).toHaveBeenCalledWith(
@@ -135,6 +147,69 @@ describe('TicketStatusReconciliationJob', () => {
     );
   });
 
+  it('repairs owner drift when the chain wallet belongs to a known user', async () => {
+    prisma.ticket.findMany.mockResolvedValue([
+      {
+        id: 'ticket-owner-drifted',
+        chainTicketId: 4n,
+        status: TicketStatus.VALID,
+        ownerId: 'stale-owner',
+        owner: { stellarPublicKey: 'GOLDOWNER' },
+      },
+    ]);
+    stellar.verifyTicket.mockResolvedValue({
+      status: 'Valid',
+      owner: 'GNEWOWNER',
+    });
+    prisma.user.findUnique.mockResolvedValue({ id: 'chain-owner' });
+
+    await expect(job.reconcileOnce()).resolves.toEqual({
+      checked: 1,
+      drifted: 1,
+      repaired: 1,
+      raced: 0,
+      failed: 0,
+    });
+    expect(prisma.user.findUnique).toHaveBeenCalledWith({
+      where: { stellarPublicKey: 'GNEWOWNER' },
+      select: { id: true },
+    });
+    expect(prisma.ticket.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: 'ticket-owner-drifted',
+        status: TicketStatus.VALID,
+        ownerId: 'stale-owner',
+      },
+      data: { ownerId: 'chain-owner' },
+    });
+  });
+
+  it('does not replace the owner when the chain wallet is not a known user', async () => {
+    prisma.ticket.findMany.mockResolvedValue([
+      {
+        id: 'ticket-unknown-owner',
+        chainTicketId: 5n,
+        status: TicketStatus.VALID,
+        ownerId: 'current-owner',
+        owner: { stellarPublicKey: 'GCURRENT' },
+      },
+    ]);
+    stellar.verifyTicket.mockResolvedValue({
+      status: 'Valid',
+      owner: 'GUNKNOWN',
+    });
+    prisma.user.findUnique.mockResolvedValue(null);
+
+    await expect(job.reconcileOnce()).resolves.toMatchObject({
+      checked: 1,
+      drifted: 0,
+      repaired: 0,
+      raced: 0,
+      failed: 0,
+    });
+    expect(prisma.ticket.updateMany).not.toHaveBeenCalled();
+  });
+
   it('does not overwrite a status changed since the ticket was read', async () => {
     const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation();
     prisma.ticket.findMany.mockResolvedValue([
@@ -142,9 +217,14 @@ describe('TicketStatusReconciliationJob', () => {
         id: 'ticket-raced',
         chainTicketId: 7n,
         status: TicketStatus.VALID,
+        ownerId: 'owner-1',
+        owner: { stellarPublicKey: 'GOWNER1' },
       },
     ]);
-    stellar.verifyTicket.mockResolvedValue({ status: 'Used' });
+    stellar.verifyTicket.mockResolvedValue({
+      status: 'Used',
+      owner: 'GOWNER1',
+    });
     prisma.ticket.updateMany.mockResolvedValue({ count: 0 });
 
     await expect(job.reconcileOnce()).resolves.toMatchObject({
