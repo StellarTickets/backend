@@ -129,8 +129,10 @@ describe('TicketsService', () => {
         Array.isArray(cb) ? Promise.all(cb) : cb(prisma),
       ),
     };
+    };
     organizations = { assertMember: jest.fn().mockResolvedValue(undefined) };
-    stellar = {
+    gates = { assertBelongsToEvent: jest.fn().mockResolvedValue({ id: 'gate-1', eventId: 'event-1', zone: null }) };
+    (globalThis as any).__gatesMock = gates;
       buildIssueTicketTx: jest.fn().mockResolvedValue('unsigned-xdr'),
       buildPurchasePrimaryTx: jest.fn().mockResolvedValue('unsigned-xdr'),
       buildTransferTicketTx: jest.fn().mockResolvedValue('unsigned-xdr'),
@@ -143,7 +145,7 @@ describe('TicketsService', () => {
       submitSignedTransaction: jest
         .fn()
         .mockResolvedValue({ result: 7n, txHash: '0xabc' }),
-      verifyTicket: jest.fn(),
+      verifyTicket: jest.fn().mockResolvedValue({ status: 'Used' }),
       decodeSignedInvocation: jest.fn(),
       txHashOf: jest.fn().mockReturnValue('hash-1'),
       getResaleFeeBps: jest.fn().mockResolvedValue(0),
@@ -174,6 +176,9 @@ describe('TicketsService', () => {
       config as unknown as ConfigService,
       undefined,
       undefined,
+      undefined,
+      undefined,
+      (globalThis as any).__gatesMock as never,
       undefined,
       undefined,
       qrTokens as unknown as QrTokenService,
@@ -2842,6 +2847,25 @@ describe('TicketsService', () => {
       expect(stellar.submitSignedTransaction).toHaveBeenCalledWith(
         'signed-xdr',
       );
+      expect(stellar.verifyTicket).toHaveBeenCalledWith(7n);
+    });
+
+    it('stores VALID for multi-use device check-ins until exhausted', async () => {
+      mockSignedCall('check_in', [DEVICE_KEY, 7n]);
+      stellar.verifyTicket.mockResolvedValueOnce({ status: 'Valid' });
+      prisma.ticket.update.mockImplementation(({ data }) =>
+        Promise.resolve({ id: 'ticket-1', ...data }),
+      );
+
+      const result = await service.confirmCheckInByDevice(
+        'ticket-1',
+        'signed-xdr',
+        undefined,
+        undefined,
+        registered,
+      );
+
+      expect(result.status).toBe('VALID');
     });
 
     it('rejects an organizer-signed check-in from a device that has its own key', async () => {
@@ -2908,6 +2932,7 @@ describe('TicketsService', () => {
       expect(stellar.submitSignedTransaction).toHaveBeenCalledWith(
         'signed-xdr',
       );
+      expect(stellar.verifyTicket).toHaveBeenCalledWith(7n);
       const updateCall = prisma.ticket.update.mock.calls[0] as [
         { where: { id: string }; data: { status: string; checkedInAt: Date } },
       ];
@@ -2918,6 +2943,27 @@ describe('TicketsService', () => {
       expect((result.checkedInAt as Date).getTime()).toBeGreaterThanOrEqual(
         before,
       );
+    });
+
+    it('keeps multi-use tickets VALID until exhausted', async () => {
+      prisma.ticket.findUnique.mockResolvedValue(ticketRow);
+      stellar.verifyTicket.mockResolvedValueOnce({ status: 'Valid' });
+      prisma.ticket.update.mockImplementation(({ data }) =>
+        Promise.resolve({ id: 'ticket-1', ...data }),
+      );
+
+      const result = await service.confirmCheckIn(
+        'user-1',
+        'ticket-1',
+        'signed-xdr',
+      );
+
+      expect(prisma.ticket.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ status: 'VALID' }),
+        }),
+      );
+      expect(result.status).toBe('VALID');
     });
 
     it('does not update the ticket when submission fails', async () => {
@@ -3075,6 +3121,15 @@ describe('TicketsService', () => {
 
       await expect(
         service.buildBuyResaleTx('buyer-1', 'ticket-1'),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(stellar.buildBuyResaleTx).not.toHaveBeenCalled();
+    });
+
+    it('rejects when the buyer is the seller', async () => {
+      prisma.ticket.findUnique.mockResolvedValue(resaleTicketRow);
+
+      await expect(
+        service.buildBuyResaleTx('seller-1', 'ticket-1'),
       ).rejects.toBeInstanceOf(BadRequestException);
       expect(stellar.buildBuyResaleTx).not.toHaveBeenCalled();
     });

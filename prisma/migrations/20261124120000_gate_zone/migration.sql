@@ -1,0 +1,1 @@
+﻿ALTER TABLE "Gate" ADD COLUMN "zone" TEXT;

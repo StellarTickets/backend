@@ -28,6 +28,7 @@ import { TransferTicketDto } from './dto/transfer-ticket.dto';
 import { ConfirmTransferTicketDto } from './dto/confirm-transfer-ticket.dto';
 import { ConfirmSignedTxDto } from './dto/confirm-signed-tx.dto';
 import { ConfirmCheckInDto } from './dto/confirm-check-in.dto';
+import { BuildCheckInDto } from './dto/build-check-in.dto';
 import { ListForResaleDto } from './dto/list-for-resale.dto';
 import { ConfirmListForResaleDto } from './dto/confirm-list-for-resale.dto';
 import {
@@ -256,8 +257,9 @@ export class TicketsController {
   buildCheckInTx(
     @CurrentUser() user: CurrentUserPayload,
     @Param('ticketId') ticketId: string,
+    @Body() dto: BuildCheckInDto,
   ) {
-    return this.ticketsService.buildCheckInTx(user.userId, ticketId);
+    return this.ticketsService.buildCheckInTx(user.userId, ticketId, dto.gateId);
   }
 
   @Post(':ticketId/confirm-check-in')

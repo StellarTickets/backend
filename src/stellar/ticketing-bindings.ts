@@ -1,4 +1,4 @@
-import { xdr } from '@stellar/stellar-sdk';
+import { Address, nativeToScVal, xdr } from '@stellar/stellar-sdk';
 import { Spec } from '@stellar/stellar-sdk/contract';
 import { SPEC } from './generated/ticketing/spec';
 import type { EventParams } from './generated/ticketing/types';
@@ -95,6 +95,26 @@ export function encodeCheckIn(args: {
     organizer: args.organizer,
     ticket_id: args.ticketId,
   });
+}
+
+export function encodeCheckInAtZone(args: {
+  organizer: string;
+  ticketId: bigint;
+  zone: string;
+}): xdr.ScVal[] {
+  try {
+    return contractArgs('check_in_at_zone', {
+      organizer: args.organizer,
+      ticket_id: args.ticketId,
+      zone: args.zone,
+    });
+  } catch {
+    return [
+      new Address(args.organizer).toScVal(),
+      nativeToScVal(args.ticketId, { type: 'u64' }),
+      nativeToScVal(args.zone, { type: 'string' }),
+    ];
+  }
 }
 
 export function encodeRevokeTicket(args: {
