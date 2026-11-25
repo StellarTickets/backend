@@ -53,10 +53,12 @@ describe('TicketsController', () => {
     confirmCheckIn: jest.fn(),
     buildRevokeTx: jest.fn(),
     confirmRevoke: jest.fn(),
-    revokeBatch: jest.fn(),
+    buildRevokeBatch: jest.fn(),
+    confirmRevokeBatch: jest.fn(),
     buildListForResaleTx: jest.fn(),
     confirmListForResale: jest.fn(),
     getPriceHistory: jest.fn(),
+    buildUpdateResalePriceTx: jest.fn(),
     updateResalePrice: jest.fn(),
     cancelExpiredListings: jest.fn(),
     buildCancelResaleTx: jest.fn(),
@@ -105,6 +107,7 @@ describe('TicketsController', () => {
       'buildCheckInTx',
       'buildRevokeTx',
       'buildListForResaleTx',
+      'buildUpdateResalePriceTx',
       'buildCancelResaleTx',
       'buildBuyResaleTx',
     ] as const)('makes %s idempotent', (handler) => {
@@ -611,8 +614,12 @@ describe('TicketsController', () => {
   describe('check-in', () => {
     it('POST /:ticketId/check-in builds the tx', async () => {
       service.buildCheckInTx.mockResolvedValue({ xdr: 'x' });
-      await http().post('/tickets/t1/check-in').set(AUTH).expect(201);
-      expect(service.buildCheckInTx).toHaveBeenCalledWith(uid, 't1');
+      await http()
+        .post('/tickets/t1/check-in')
+        .set(AUTH)
+        .send({ gateId: UUID })
+        .expect(201);
+      expect(service.buildCheckInTx).toHaveBeenCalledWith(uid, 't1', UUID);
     });
 
     it('POST /:ticketId/confirm-check-in forwards gate and reason', async () => {
@@ -667,13 +674,34 @@ describe('TicketsController', () => {
     });
 
     it('POST /events/:eventId/revoke-batch forwards ticket ids', async () => {
-      service.revokeBatch.mockResolvedValue({ revoked: 2 });
+      service.buildRevokeBatch.mockResolvedValue({
+        unsignedXdrs: ['AAAA'],
+        chunkSize: 35,
+      });
       await http()
         .post('/tickets/events/e1/revoke-batch')
         .set(AUTH)
         .send({ ticketIds: ['a', 'b'] })
         .expect(201);
-      expect(service.revokeBatch).toHaveBeenCalledWith(uid, 'e1', ['a', 'b']);
+      expect(service.buildRevokeBatch).toHaveBeenCalledWith(uid, 'e1', [
+        'a',
+        'b',
+      ]);
+    });
+
+    it('POST /events/:eventId/confirm-revoke-batch forwards ids and signed XDRs', async () => {
+      service.confirmRevokeBatch.mockResolvedValue({ count: 2 });
+      await http()
+        .post('/tickets/events/e1/confirm-revoke-batch')
+        .set(AUTH)
+        .send({ ticketIds: ['a', 'b'], signedXdrs: ['AAAA'] })
+        .expect(201);
+      expect(service.confirmRevokeBatch).toHaveBeenCalledWith(
+        uid,
+        'e1',
+        ['a', 'b'],
+        ['AAAA'],
+      );
     });
 
     it.each([
@@ -686,7 +714,16 @@ describe('TicketsController', () => {
         .set(AUTH)
         .send(body)
         .expect(400);
-      expect(service.revokeBatch).not.toHaveBeenCalled();
+      expect(service.buildRevokeBatch).not.toHaveBeenCalled();
+    });
+
+    it('rejects a confirm-revoke-batch body without signed XDRs', async () => {
+      await http()
+        .post('/tickets/events/e1/confirm-revoke-batch')
+        .set(AUTH)
+        .send({ ticketIds: ['a'] })
+        .expect(400);
+      expect(service.confirmRevokeBatch).not.toHaveBeenCalled();
     });
   });
 
@@ -736,19 +773,44 @@ describe('TicketsController', () => {
       );
     });
 
-    it('PATCH /resale/:listingId/price updates the price and validates it', async () => {
+    it('POST /resale/:listingId/price builds the re-listing (#502)', async () => {
+      service.buildUpdateResalePriceTx.mockResolvedValue({ unsignedXdr: 'u' });
+      await http()
+        .post('/tickets/resale/l1/price')
+        .set(AUTH)
+        .send({ price: '900' })
+        .expect(201);
+      expect(service.buildUpdateResalePriceTx).toHaveBeenCalledWith(
+        uid,
+        'l1',
+        '900',
+      );
+    });
+
+    it('PATCH /resale/:listingId/price relays the signed re-listing and validates it', async () => {
       service.updateResalePrice.mockResolvedValue({ id: 'l1' });
       await http()
         .patch('/tickets/resale/l1/price')
         .set(AUTH)
-        .send({ price: '900' })
+        .send({ price: '900', signedXdr: 'AAAA' })
         .expect(200);
-      expect(service.updateResalePrice).toHaveBeenCalledWith(uid, 'l1', '900');
+      expect(service.updateResalePrice).toHaveBeenCalledWith(
+        uid,
+        'l1',
+        '900',
+        'AAAA',
+      );
 
       await http()
         .patch('/tickets/resale/l1/price')
         .set(AUTH)
-        .send({ price: 'x' })
+        .send({ price: 'x', signedXdr: 'AAAA' })
+        .expect(400);
+      // #502 — a DB-only price change is no longer possible.
+      await http()
+        .patch('/tickets/resale/l1/price')
+        .set(AUTH)
+        .send({ price: '900' })
         .expect(400);
     });
 

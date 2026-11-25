@@ -5,23 +5,14 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { SchedulerRegistry } from '@nestjs/schedule';
-import { TicketStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { StellarService } from '../stellar/stellar.service';
-import type { OnChainTicket } from '../stellar/stellar.service';
+import { CHAIN_STATUS_TO_DB_STATUS } from '../stellar/ticket-status';
 
 export const TICKET_STATUS_RECONCILIATION_JOB_NAME =
   'ticket-status-reconciliation';
 export const DEFAULT_TICKET_RECONCILIATION_INTERVAL_MINUTES = 60;
 const RECONCILIATION_PAGE_SIZE = 100;
-
-const CHAIN_STATUS_TO_DB_STATUS: Record<OnChainTicket['status'], TicketStatus> =
-  {
-    Valid: TicketStatus.VALID,
-    Used: TicketStatus.USED,
-    Revoked: TicketStatus.REVOKED,
-    Resale: TicketStatus.RESALE,
-  };
 
 export interface TicketStatusReconciliationCounts {
   checked: number;
@@ -48,7 +39,7 @@ export function ticketReconciliationIntervalMs(
   return minutes * 60_000;
 }
 
-/** Reconciles the cached ticket status against the contract's source of truth. */
+/** Reconciles cached ticket status and ownership against the contract. */
 @Injectable()
 export class TicketStatusReconciliationJob
   implements OnModuleInit, OnModuleDestroy
@@ -114,7 +105,13 @@ export class TicketStatusReconciliationJob
     while (true) {
       const tickets = await this.prisma.ticket.findMany({
         ...(afterId ? { where: { id: { gt: afterId } } } : {}),
-        select: { id: true, chainTicketId: true, status: true },
+        select: {
+          id: true,
+          chainTicketId: true,
+          status: true,
+          ownerId: true,
+          owner: { select: { stellarPublicKey: true } },
+        },
         orderBy: { id: 'asc' },
         take: RECONCILIATION_PAGE_SIZE,
       });
@@ -127,26 +124,50 @@ export class TicketStatusReconciliationJob
         try {
           const onChain = await this.stellar.verifyTicket(ticket.chainTicketId);
           const expectedStatus = CHAIN_STATUS_TO_DB_STATUS[onChain.status];
-          if (expectedStatus === ticket.status) {
+          const statusDrifted = expectedStatus !== ticket.status;
+          const ownerWalletDrifted =
+            onChain.owner !== ticket.owner.stellarPublicKey;
+
+          // A chain wallet without a corresponding account cannot be represented
+          // as a Ticket owner, so preserve the current owner in that case.
+          const chainOwner = ownerWalletDrifted
+            ? await this.prisma.user.findUnique({
+                where: { stellarPublicKey: onChain.owner },
+                select: { id: true },
+              })
+            : null;
+          const expectedOwnerId = chainOwner?.id;
+          const ownerDrifted =
+            expectedOwnerId !== undefined && expectedOwnerId !== ticket.ownerId;
+
+          if (!statusDrifted && !ownerDrifted) {
             continue;
           }
 
           counts.drifted++;
+          const data = {
+            ...(statusDrifted ? { status: expectedStatus } : {}),
+            ...(ownerDrifted ? { ownerId: expectedOwnerId } : {}),
+          };
           const result = await this.prisma.ticket.updateMany({
-            where: { id: ticket.id, status: ticket.status },
-            data: { status: expectedStatus },
+            where: {
+              id: ticket.id,
+              status: ticket.status,
+              ownerId: ticket.ownerId,
+            },
+            data,
           });
           if (result.count === 0) {
             counts.raced++;
             this.logger.warn(
-              `Ticket status drift changed during reconciliation (ticketId=${ticket.id}, chainStatus=${expectedStatus})`,
+              `Ticket drift changed during reconciliation (ticketId=${ticket.id}, chainStatus=${expectedStatus}, chainOwner=${onChain.owner})`,
             );
             continue;
           }
 
           counts.repaired++;
           this.logger.warn(
-            `Repaired ticket status drift (ticketId=${ticket.id}, databaseStatus=${ticket.status}, chainStatus=${expectedStatus})`,
+            `Repaired ticket drift (ticketId=${ticket.id}, statusDrifted=${statusDrifted}, ownerDrifted=${ownerDrifted})`,
           );
         } catch (err) {
           counts.failed++;

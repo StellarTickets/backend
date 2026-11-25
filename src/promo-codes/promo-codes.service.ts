@@ -3,7 +3,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { PromoCodeDiscountType } from '@prisma/client';
+import { Prisma, PromoCodeDiscountType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { OrganizationsService } from '../organizations/organizations.service';
 import { CreatePromoCodeDto } from './dto/create-promo-code.dto';
@@ -28,14 +28,7 @@ export class PromoCodesService {
   ) {}
 
   async create(userId: string, eventId: string, dto: CreatePromoCodeDto) {
-    const event = await this.prisma.event.findUnique({
-      where: { id: eventId },
-    });
-    // #207 — soft-deleted events behave as not-found.
-    if (!event || (event as { deletedAt?: Date | null }).deletedAt) {
-      throw new NotFoundException('Event not found');
-    }
-    await this.organizations.assertMember(event.organizationId, userId);
+    await this.organizations.findEventForMember(eventId, userId);
 
     if (
       dto.discountType === PromoCodeDiscountType.PERCENT &&
@@ -60,13 +53,7 @@ export class PromoCodesService {
   }
 
   async listForEvent(userId: string, eventId: string) {
-    const event = await this.prisma.event.findUnique({
-      where: { id: eventId },
-    });
-    if (!event || (event as { deletedAt?: Date | null }).deletedAt) {
-      throw new NotFoundException('Event not found');
-    }
-    await this.organizations.assertMember(event.organizationId, userId);
+    await this.organizations.findEventForMember(eventId, userId);
 
     return this.prisma.promoCode.findMany({
       where: { eventId },
@@ -166,41 +153,68 @@ export class PromoCodesService {
   }
 
   /**
-   * Records a redemption once a purchase actually completes. Re-checks the
-   * usage limit inside the same call so a race between two concurrent
-   * purchases can't both squeeze under `maxRedemptions` -- the unique
-   * [promoCodeId, userId] constraint additionally makes a double-redeem by
-   * the same user a DB-level impossibility, not just an app-level check.
+   * Records a redemption once a purchase actually completes.
+   *
+   * #507 — the limit is enforced by a conditional increment
+   * (`redemptionCount < maxRedemptions` in the WHERE clause), which the
+   * database applies atomically: of two concurrent buyers racing for the last
+   * slot, exactly one update matches. The unique [promoCodeId, userId]
+   * constraint additionally makes a double-redeem by the same user a
+   * DB-level impossibility.
+   *
+   * #506 — pass the caller's transaction client (`tx`) so the redemption
+   * commits or rolls back together with the ticket it pays for. The promo row
+   * is locked first so the re-validation reads the committed state.
    */
   async redeem(
     eventId: string,
     userId: string,
     rawCode: string,
     ticketId: string,
+    tx?: Prisma.TransactionClient,
+  ) {
+    if (tx) return this.redeemWith(tx, eventId, userId, rawCode, ticketId);
+    return this.prisma.$transaction((inner) =>
+      this.redeemWith(inner, eventId, userId, rawCode, ticketId),
+    );
+  }
+
+  private async redeemWith(
+    tx: Prisma.TransactionClient,
+    eventId: string,
+    userId: string,
+    rawCode: string,
+    ticketId: string,
   ) {
     const code = rawCode.trim().toUpperCase();
-    return this.prisma.$transaction(async (tx) => {
-      const promoCode = await tx.promoCode.findUnique({
-        where: { eventId_code: { eventId, code } },
-      });
-      if (!promoCode || !promoCode.isActive) {
-        throw new BadRequestException('Invalid promo code');
-      }
-      if (
-        promoCode.maxRedemptions !== null &&
-        promoCode.redemptionCount >= promoCode.maxRedemptions
-      ) {
-        throw new BadRequestException(
-          'This promo code has reached its redemption limit',
-        );
-      }
-      await tx.promoCode.update({
-        where: { id: promoCode.id },
-        data: { redemptionCount: { increment: 1 } },
-      });
-      return tx.promoCodeRedemption.create({
-        data: { promoCodeId: promoCode.id, userId, ticketId },
-      });
+    // Row lock: concurrent redemptions of this code serialize here.
+    await tx.$queryRaw`SELECT "id" FROM "PromoCode" WHERE "eventId" = ${eventId} AND "code" = ${code} FOR UPDATE`;
+    const promoCode = await tx.promoCode.findUnique({
+      where: { eventId_code: { eventId, code } },
+    });
+    if (!promoCode || !promoCode.isActive) {
+      throw new BadRequestException('Invalid promo code');
+    }
+    if (promoCode.expiresAt && promoCode.expiresAt.getTime() <= Date.now()) {
+      throw new BadRequestException('This promo code has expired');
+    }
+    const { count } = await tx.promoCode.updateMany({
+      where: {
+        id: promoCode.id,
+        isActive: true,
+        ...(promoCode.maxRedemptions !== null
+          ? { redemptionCount: { lt: promoCode.maxRedemptions } }
+          : {}),
+      },
+      data: { redemptionCount: { increment: 1 } },
+    });
+    if (count !== 1) {
+      throw new BadRequestException(
+        'This promo code has reached its redemption limit',
+      );
+    }
+    return tx.promoCodeRedemption.create({
+      data: { promoCodeId: promoCode.id, userId, ticketId },
     });
   }
 

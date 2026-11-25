@@ -1,7 +1,7 @@
 import { ConflictException, NotFoundException } from '@nestjs/common';
 import { GatesService } from './gates.service';
 import type { PrismaService } from '../prisma/prisma.service';
-import type { OrganizationsService } from '../organizations/organizations.service';
+import { OrganizationsService } from '../organizations/organizations.service';
 
 describe('GatesService', () => {
   let service: GatesService;
@@ -14,7 +14,8 @@ describe('GatesService', () => {
       delete: jest.Mock;
     };
   };
-  let organizations: { assertMember: jest.Mock };
+  let organizations: OrganizationsService;
+  let assertMember: jest.SpyInstance;
 
   beforeEach(() => {
     prisma = {
@@ -26,10 +27,15 @@ describe('GatesService', () => {
         delete: jest.fn(),
       },
     };
-    organizations = { assertMember: jest.fn() };
+    organizations = new OrganizationsService(
+      prisma as unknown as PrismaService,
+    );
+    assertMember = jest
+      .spyOn(organizations, 'assertMember')
+      .mockResolvedValue(undefined);
     service = new GatesService(
       prisma as unknown as PrismaService,
-      organizations as unknown as OrganizationsService,
+      organizations,
     );
   });
 
@@ -51,10 +57,7 @@ describe('GatesService', () => {
 
       await service.create('user-1', 'event-1', { name: 'Main Gate' });
 
-      expect(organizations.assertMember).toHaveBeenCalledWith(
-        'org-1',
-        'user-1',
-      );
+      expect(assertMember).toHaveBeenCalledWith('org-1', 'user-1');
     });
 
     it('rejects a duplicate gate name for the same event', async () => {

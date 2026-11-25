@@ -6,9 +6,13 @@ import {
   ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import { IsStellarPublicKey } from '../../common/decorators/is-stellar-public-key.decorator';
 import { IsSeat } from '../../common/decorators/is-seat.decorator';
 
+function trimSeat(value: unknown): unknown {
+  return typeof value === 'string' ? value.trim() : value;
+}
 export class IssueBatchRecipientDto {
   @IsUUID()
   toUserId!: string;
@@ -18,6 +22,7 @@ export class IssueBatchRecipientDto {
   toPublicKey!: string;
 
   @IsOptional()
+  @Transform(({ value }) => trimSeat(value))
   @IsSeat()
   seat?: string;
 }

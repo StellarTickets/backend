@@ -5,7 +5,11 @@ import { HeartbeatJob } from './heartbeat.job';
 import { ChainEventIndexerJob } from '../indexer/chain-event-indexer.job';
 import { IndexerModule } from '../indexer/indexer.module';
 import { StellarModule } from '../stellar/stellar.module';
+import { EventsModule } from '../events/events.module';
+import { MetricsModule } from '../common/metrics/metrics.module';
 import { TicketStatusReconciliationJob } from './ticket-status-reconciliation.job';
+import { DistributedLockService } from './distributed-lock.service';
+import { EventReminderJob } from './event-reminder.job';
 
 /** Cron jobs run unless `SCHEDULER_ENABLED=false`. */
 export function isSchedulerEnabled(
@@ -31,12 +35,21 @@ export class SchedulerModule {
     }
     return {
       module: SchedulerModule,
-      imports: [ScheduleModule.forRoot(), IndexerModule, StellarModule],
+      imports: [
+        ScheduleModule.forRoot(),
+        IndexerModule,
+        StellarModule,
+        EventsModule,
+        MetricsModule,
+      ],
       providers: [
         HeartbeatJob,
         ChainEventIndexerJob,
         TicketStatusReconciliationJob,
+        DistributedLockService,
+        EventReminderJob,
       ],
+      exports: [DistributedLockService],
     };
   }
 }

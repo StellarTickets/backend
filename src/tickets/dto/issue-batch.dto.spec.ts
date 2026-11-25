@@ -1,3 +1,4 @@
+import 'reflect-metadata';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
 import { IssueBatchDto } from './issue-batch.dto';
@@ -70,5 +71,19 @@ describe('IssueBatchDto', () => {
     });
     const errors = await validate(dto);
     expect(errors.length).toBeGreaterThan(0);
+  });
+  it('trims whitespace from recipient seats', () => {
+    const dto = plainToInstance(IssueBatchDto, {
+      ticketTypeId: UUID,
+      recipients: [
+        {
+          toUserId: UUID,
+          toPublicKey: PUBKEY,
+          seat: ' A1 ',
+        },
+      ],
+    });
+
+    expect(dto.recipients[0].seat).toBe('A1');
   });
 });

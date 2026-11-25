@@ -10,6 +10,15 @@ services:
     volumes:
       - postgres-data:/var/lib/postgresql/data
 
+  # Local Soroban chain (standalone network). RPC and friendbot are on :8000.
+  # Ephemeral: state resets on every restart. Deploy the contract with
+  # scripts/deploy-local-contract.sh once it is up.
+  soroban:
+    image: stellar/quickstart:latest
+    command: --local --enable rpc
+    ports:
+      - "8000:8000"
+
   # Runs the API with hot reload against the `postgres` service above.
   # Included under the "full" profile so `docker compose up` (no profile)
   # keeps its existing behaviour of just starting the database; run

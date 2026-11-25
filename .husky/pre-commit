@@ -1,1 +1,2 @@
+node scripts/check-conflict-markers.js --staged
 npx lint-staged

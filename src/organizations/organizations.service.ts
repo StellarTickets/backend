@@ -229,6 +229,21 @@ export class OrganizationsService {
     }
   }
 
+  /**
+   * Loads a live event and asserts `userId` belongs to its organization.
+   * Soft-deleted events behave as not-found (#207).
+   */
+  async findEventForMember(eventId: string, userId: string) {
+    const event = await this.prisma.event.findUnique({
+      where: { id: eventId },
+    });
+    if (!event || event.deletedAt) {
+      throw new NotFoundException('Event not found');
+    }
+    await this.assertMember(event.organizationId, userId);
+    return event;
+  }
+
   /** Throws unless `userId` holds one of `roles` in `organizationId`. */
   async assertRole(
     organizationId: string,

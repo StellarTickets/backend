@@ -309,6 +309,9 @@ model ResaleListing {
   status       ResaleListingStatus  @default(ACTIVE)
   txHash       String?
   expiresAt    DateTime?
+  /// #503 — when the seller was asked to sign `cancel_resale` after
+  /// `expiresAt` passed while the ticket was still listed on chain.
+  expiryNotifiedAt DateTime?
   priceHistory ResalePriceHistory[]
   createdAt    DateTime             @default(now())
   updatedAt    DateTime             @updatedAt
@@ -409,6 +412,8 @@ model Gate {
   event     Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
   eventId   String
   name      String
+  /// Optional on-chain zone identifier. When set, check-ins at this gate use `check_in_at_zone`.
+  zone      String?
   checkIns  Ticket[]
   createdAt DateTime @default(now())
 
@@ -425,6 +430,12 @@ model ScannerDevice {
   eventId    String
   name       String
   tokenHash  String    @unique
+  /// #515 — the device's own Stellar (G...) key. It signs `check_in` as a
+  /// delegated check-in signer, so the gate never holds the organizer key.
+  stellarPublicKey   String?
+  /// #515 — when `add_checkin_signer` for `stellarPublicKey` was confirmed on
+  /// chain; null until then, and cleared when the signer is removed.
+  signerRegisteredAt DateTime?
   lastUsedAt DateTime?
   revokedAt  DateTime?
   createdAt  DateTime  @default(now())

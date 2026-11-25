@@ -37,6 +37,12 @@ export class ResaleExpiryService implements OnModuleInit {
           `Cancelled ${result.cancelledCount} expired resale listing(s).`,
         );
       }
+      // #503 — still listed on chain; only the seller can delist them.
+      if (result.awaitingSellerCount > 0) {
+        this.logger.log(
+          `${result.awaitingSellerCount} expired listing(s) are still live on chain, waiting for the seller to cancel.`,
+        );
+      }
     } catch (err) {
       this.logger.error('Failed to cancel expired resale listings', err);
     }

@@ -19,6 +19,7 @@ import {
 } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { UNASSIGNED_SEAT } from '../common/constants/seat.constant';
+import { REVOKE_BATCH_CHUNK_SIZE } from '../common/constants/revoke-batch.constant';
 import {
   ListingInactiveError,
   TicketTypeSoldOutError,
@@ -36,6 +37,7 @@ import { QrTokenService } from './qr-token.service';
 import { PromoCodesService } from '../promo-codes/promo-codes.service';
 import { GatesService } from '../gates/gates.service';
 import { FeatureFlagsService } from '../config/feature-flags.service';
+import { WaitlistService } from '../waitlist/waitlist.service';
 
 /** How long an offline-verifiable token stays valid before a scanner must re-verify online. */
 const OFFLINE_TOKEN_TTL_SECONDS = 12 * 60 * 60;
@@ -43,7 +45,7 @@ const OFFLINE_TOKEN_TTL_SECONDS = 12 * 60 * 60;
 /** Plain JSON for `ProcessedTx.response`: BigInts become strings, as they do in HTTP responses. */
 function toStoredResponse(value: unknown): Prisma.InputJsonValue {
   if (value === undefined || value === null) {
-    return Prisma.JsonNull;
+    return Prisma.JsonNull as unknown as Prisma.InputJsonValue;
   }
   return JSON.parse(
     JSON.stringify(value, (_key, v: unknown) =>
@@ -51,6 +53,26 @@ function toStoredResponse(value: unknown): Prisma.InputJsonValue {
     ),
   ) as Prisma.InputJsonValue;
 }
+
+/** #515 — the parts of a `ScannerDevice` that decide how it signs check-ins. */
+export interface DeviceSigner {
+  stellarPublicKey: string | null;
+  signerRegisteredAt: Date | null;
+}
+
+/** #503 — the cached `Ticket.status` for each on-chain ticket status. */
+const TICKET_STATUS_FOR_CHAIN: Record<OnChainTicket['status'], TicketStatus> = {
+  Valid: TicketStatus.VALID,
+  Used: TicketStatus.USED,
+  Revoked: TicketStatus.REVOKED,
+  Resale: TicketStatus.RESALE,
+};
+
+/** #501 — statuses `revokeBatch` may move to REVOKED. */
+const REVOCABLE_STATUSES: TicketStatus[] = [
+  TicketStatus.VALID,
+  TicketStatus.RESALE,
+];
 
 @Injectable()
 export class TicketsService {
@@ -68,6 +90,7 @@ export class TicketsService {
     @Optional() private readonly audit?: AuditService,
     @Optional() private readonly featureFlags?: FeatureFlagsService,
     @Optional() private readonly qrTokens?: QrTokenService,
+    @Optional() private readonly waitlist?: WaitlistService,
   ) {}
 
   // ---- Organizer-authorized issuance (off-chain payment already settled) ----
@@ -187,8 +210,7 @@ export class TicketsService {
     ticketTypeId: string,
     recipients: Array<{ toUserId: string; toPublicKey: string; seat?: string }>,
   ) {
-    const maxBatchSize =
-      this.config?.get<number>('ISSUE_BATCH_MAX_SIZE') ?? 50;
+    const maxBatchSize = this.config?.get<number>('ISSUE_BATCH_MAX_SIZE') ?? 50;
     if (recipients.length > maxBatchSize) {
       throw new BadRequestException(
         `Batch size exceeds the maximum of ${maxBatchSize} recipients`,
@@ -289,11 +311,16 @@ export class TicketsService {
     const { ticketType, event } =
       await this.getTicketTypeWithEvent(ticketTypeId);
     this.assertHasCapacity(ticketType.quantityIssued, ticketType.quantityTotal);
-    if (event.status !== EventStatus.PUBLISHED || event.chainEventId === null) {
-      throw new BadRequestException(
-        event.status === EventStatus.CANCELLED
-          ? 'Event has been cancelled'
-          : 'Event has not been published on-chain yet',
+    this.assertPurchasable(event, ticketType, promoCode);
+    const buyer = await this.getUserWithWallet(buyerId);
+    // The on-chain tier price is the contract's source of truth after #127;
+    // still validate a promo code here so an invalid one fails at build time.
+    if (promoCode) {
+      await this.promoCodes!.validate(
+        event.id,
+        buyerId,
+        promoCode,
+        ticketType.price,
       );
     }
     const buyer = await this.getUserWithWallet(buyerId);
@@ -327,7 +354,21 @@ export class TicketsService {
       await this.getTicketTypeWithEvent(ticketTypeId);
     const replay = await this.findProcessedTx<Ticket>(signedXdr);
     if (replay) return replay.value;
+    // #508 — a transaction built before the event was cancelled, unpublished
+    // or its sale window closed must not be recorded: re-run the build-time
+    // guards against the current state before submitting.
+    this.assertPurchasable(event, ticketType, promoCode);
     const buyer = await this.getUserWithWallet(buyerId);
+    // #506 — fail before touching the chain if the promo can no longer be
+    // redeemed by this buyer; the atomic redemption below is the final word.
+    if (promoCode) {
+      await this.promoCodes!.validate(
+        event.id,
+        buyerId,
+        promoCode,
+        ticketType.price,
+      );
+    }
     // #377 — the DB row must describe the ticket the chain will mint.
     this.assertSignedInvocation(signedXdr, 'purchase_primary', [
       ['buyer', 0, buyer.stellarPublicKey],
@@ -337,8 +378,10 @@ export class TicketsService {
     ]);
     // #211 — fail fast on duplicate assigned seats before touching the chain.
     await this.assertSeatAvailable(event.id, seat);
-    const { result, txHash } =
-      await this.stellar.submitSignedTransaction(signedXdr, this.attendeeSubmitOptions());
+    const { result, txHash } = await this.stellar.submitSignedTransaction(
+      signedXdr,
+      this.attendeeSubmitOptions(),
+    );
     const chainTicketId = result as bigint;
 
     let ticket;
@@ -357,7 +400,7 @@ export class TicketsService {
         }
         this.assertHasCapacity(row.quantityIssued, row.quantityTotal);
 
-        return this.recordIssuedTicket(tx, {
+        const issued = await this.recordIssuedTicket(tx, {
           eventId: event.id,
           ticketTypeId,
           ownerId: buyerId,
@@ -367,6 +410,18 @@ export class TicketsService {
           signedXdr,
           operation: 'purchase',
         });
+        // #506 — the redemption commits or rolls back with the ticket: the
+        // promo row is locked and re-validated inside this transaction.
+        if (promoCode) {
+          await this.promoCodes!.redeem(
+            event.id,
+            buyerId,
+            promoCode,
+            issued.id,
+            tx,
+          );
+        }
+        return issued;
       });
     } catch (err) {
       this.throwOnSeatConflict(err);
@@ -431,7 +486,10 @@ export class TicketsService {
       ['ticket', 1, ticket.chainTicketId],
       ['recipient', 2, toUser.stellarPublicKey],
     ]);
-    await this.stellar.submitSignedTransaction(signedXdr, this.attendeeSubmitOptions());
+    await this.stellar.submitSignedTransaction(
+      signedXdr,
+      this.attendeeSubmitOptions(),
+    );
 
     // #375 — the chain is the source of truth for ownership: only record
     // toUserId once the on-chain owner is confirmed to be their wallet.
@@ -550,12 +608,18 @@ export class TicketsService {
 
   // ---- Check-in ----
 
-  async buildCheckInTx(userId: string, ticketId: string) {
+  async buildCheckInTx(userId: string, ticketId: string, gateId?: string) {
     const ticket = await this.loadTicketForOrganizer(userId, { id: ticketId });
+    let zone: string | undefined;
+    if (gateId) {
+      const gate = await this.gates!.assertBelongsToEvent(gateId, ticket.eventId);
+      zone = (gate as { zone?: string | null }).zone ?? undefined;
+    }
 
     const unsignedXdr = await this.stellar.buildCheckInTx({
       organizerPublicKey: ticket.event.organization.stellarAccount,
       chainTicketId: ticket.chainTicketId,
+      zone,
     });
     return { unsignedXdr };
   }
@@ -570,19 +634,32 @@ export class TicketsService {
     const ticket = await this.loadTicketForOrganizer(userId, { id: ticketId });
     const replay = await this.findProcessedTx<Ticket>(signedXdr);
     if (replay) return replay.value;
-    this.assertSignedInvocation(signedXdr, 'check_in', [
+    let zone: string | undefined;
+    if (gateId) {
+      const gate = await this.gates!.assertBelongsToEvent(gateId, ticket.eventId);
+      zone = (gate as { zone?: string | null }).zone ?? undefined;
+    }
+    this.assertSignedInvocation(signedXdr, zone ? 'check_in_at_zone' : 'check_in', [
       ['organizer', 0, ticket.event.organization.stellarAccount],
       ['ticket', 1, ticket.chainTicketId],
+      ...(zone ? ([['zone', 2, zone]] as [string, number, unknown][]) : []),
     ]);
-    if (gateId) {
-      await this.gates!.assertBelongsToEvent(gateId, ticket.eventId);
-    }
     await this.stellar.submitSignedTransaction(signedXdr);
+    let status = TicketStatus.USED;
+    try {
+      const onChainTicket = await this.stellar.verifyTicket(ticket.chainTicketId);
+      status =
+        TICKET_STATUS_FOR_CHAIN[onChainTicket.status] ?? TicketStatus.USED;
+    } catch (err) {
+      this.logger.warn(
+        `Could not read on-chain ticket status after check-in for ${ticketId}: ${(err as Error).message}`,
+      );
+    }
     return this.prisma.$transaction(async (tx) => {
       const checkedIn = await tx.ticket.update({
         where: { id: ticketId },
         data: {
-          status: TicketStatus.USED,
+          status,
           checkedInAt: new Date(),
           checkedInGateId: gateId ?? null,
           checkInReason: reason ?? null,
@@ -594,33 +671,79 @@ export class TicketsService {
   }
 
   /**
+   * #515 — an unsigned `check_in` for a scanner device to sign with its own
+   * key. The device must have that key registered as a check-in signer for
+   * the event (`add_checkin_signer`); the contract accepts any registered
+   * signer as the first argument.
+   */
+  async buildCheckInTxByDevice(
+    ticketId: string,
+    device: DeviceSigner,
+    gateId?: string,
+  ) {
+    const ticket = await this.getTicketWithOrg(ticketId);
+    let zone: string | undefined;
+    if (gateId) {
+      const gate = await this.gates!.assertBelongsToEvent(gateId, ticket.eventId);
+      zone = (gate as { zone?: string | null }).zone ?? undefined;
+    }
+    const unsignedXdr = await this.stellar.buildCheckInTx({
+      organizerPublicKey: this.deviceSignerKey(device),
+      chainTicketId: ticket.chainTicketId,
+      zone,
+    });
+    return { unsignedXdr };
+  }
+
+  /**
    * Check-in via a `ScannerDevice` token (see `ScannerDeviceGuard`) instead
    * of a staff JWT. The guard already confirmed the device is live and
    * scoped to this ticket's event, so no `organizations.assertMember` call
    * is needed here.
+   *
+   * #515 — a device with a registered signer key must sign with that key.
+   * A device without one keeps the organizer-signed path, so existing
+   * devices continue to work until they are given a key.
    */
   async confirmCheckInByDevice(
     ticketId: string,
     signedXdr: string,
     gateId?: string,
     reason?: string,
+    device?: DeviceSigner,
   ) {
     const ticket = await this.getTicketWithOrg(ticketId);
     const replay = await this.findProcessedTx<Ticket>(signedXdr);
     if (replay) return replay.value;
-    this.assertSignedInvocation(signedXdr, 'check_in', [
-      ['organizer', 0, ticket.event.organization.stellarAccount],
-      ['ticket', 1, ticket.chainTicketId],
-    ]);
+    const signer = device?.signerRegisteredAt
+      ? this.deviceSignerKey(device)
+      : ticket.event.organization.stellarAccount;
+    let zone: string | undefined;
     if (gateId) {
-      await this.gates!.assertBelongsToEvent(gateId, ticket.eventId);
+      const gate = await this.gates!.assertBelongsToEvent(gateId, ticket.eventId);
+      zone = (gate as { zone?: string | null }).zone ?? undefined;
     }
+    this.assertSignedInvocation(signedXdr, zone ? 'check_in_at_zone' : 'check_in', [
+      ['signer', 0, signer],
+      ['ticket', 1, ticket.chainTicketId],
+      ...(zone ? ([['zone', 2, zone]] as [string, number, unknown][]) : []),
+    ]);
     await this.stellar.submitSignedTransaction(signedXdr);
+    let status = TicketStatus.USED;
+    try {
+      const onChainTicket = await this.stellar.verifyTicket(ticket.chainTicketId);
+      status =
+        TICKET_STATUS_FOR_CHAIN[onChainTicket.status] ?? TicketStatus.USED;
+    } catch (err) {
+      this.logger.warn(
+        `Could not read on-chain ticket status after check-in for ${ticketId}: ${(err as Error).message}`,
+      );
+    }
     return this.prisma.$transaction(async (tx) => {
       const checkedIn = await tx.ticket.update({
         where: { id: ticketId },
         data: {
-          status: TicketStatus.USED,
+          status,
           checkedInAt: new Date(),
           checkedInGateId: gateId ?? null,
           checkInReason: reason ?? null,
@@ -629,6 +752,15 @@ export class TicketsService {
       await this.recordProcessedTx(tx, signedXdr, 'check-in', checkedIn);
       return checkedIn;
     });
+  }
+
+  private deviceSignerKey(device: DeviceSigner): string {
+    if (!device.stellarPublicKey || !device.signerRegisteredAt) {
+      throw new BadRequestException(
+        'This scanner device has no registered check-in signer key',
+      );
+    }
+    return device.stellarPublicKey;
   }
 
   // ---- Revocation (fraud prevention) ----
@@ -657,6 +789,8 @@ export class TicketsService {
         where: { id: ticketId },
         data: { status: TicketStatus.REVOKED },
       });
+      // #500 — a revoked ticket must not keep a live resale listing.
+      await this.cancelActiveListings(tx, [ticketId]);
       await this.recordProcessedTx(tx, signedXdr, 'revoke', row);
       return row;
     });
@@ -667,40 +801,198 @@ export class TicketsService {
     return revoked;
   }
 
-  async revokeBatch(userId: string, eventId: string, ticketIds: string[]) {
-    const MAX_BATCH_SIZE = 100;
-    if (ticketIds.length > MAX_BATCH_SIZE) {
+  /**
+   * #499 — step 1 of batch revocation. Returns one unsigned `revoke_batch`
+   * envelope per 35-ticket chunk, in the same order as the chunks the confirm
+   * step validates.
+   */
+  async buildRevokeBatch(userId: string, eventId: string, ticketIds: string[]) {
+    const { event, tickets } = await this.loadBatchForOrganizer(
+      userId,
+      eventId,
+      ticketIds,
+    );
+    const chunks = this.revokeChunks(
+      tickets.map((ticket) => ticket.chainTicketId),
+    );
+    const unsignedXdrs: string[] = [];
+    for (const chunk of chunks) {
+      unsignedXdrs.push(
+        await this.stellar.buildRevokeBatchTx({
+          organizerPublicKey: event.organization.stellarAccount,
+          chainTicketIds: chunk,
+        }),
+      );
+    }
+    return {
+      unsignedXdrs,
+      chunkSize: REVOKE_BATCH_CHUNK_SIZE,
+    };
+  }
+
+  /**
+   * #499/#500 — step 2 of batch revocation. Validates every signed envelope
+   * against its expected chunk, submits all of them before touching the DB,
+   * then revokes tickets and cancels their ACTIVE resale listings atomically.
+   */
+  async confirmRevokeBatch(
+    userId: string,
+    eventId: string,
+    ticketIds: string[],
+    signedXdrs: string[],
+  ) {
+    const { event, tickets } = await this.loadBatchForOrganizer(
+      userId,
+      eventId,
+      ticketIds,
+    );
+    const chunks = this.revokeChunks(
+      tickets.map((ticket) => ticket.chainTicketId),
+    );
+    if (signedXdrs.length !== chunks.length) {
       throw new BadRequestException(
-        `Cannot revoke more than ${MAX_BATCH_SIZE} tickets at once`,
+        `Expected ${chunks.length} signed revoke_batch transaction(s), got ${signedXdrs.length}`,
       );
     }
 
-    const event = await this.getEventWithOrg(eventId);
-    await this.organizations.assertMember(event.organizationId, userId);
+    const processed = await Promise.all(
+      signedXdrs.map((xdr) => this.findProcessedTx<{ count: number }>(xdr)),
+    );
+    if (processed.every((entry) => entry !== null)) {
+      return processed[0].value;
+    }
+    if (processed.some((entry) => entry !== null)) {
+      throw new ConflictException(
+        'Batch revocation has already been partially confirmed',
+      );
+    }
 
     const tickets = await this.prisma.ticket.findMany({
       where: {
         id: { in: ticketIds },
         eventId,
       },
+      select: { id: true, status: true },
+    // Validate the entire batch before any network call: a mismatched chunk
+    // must never revoke tickets the organizer did not ask to revoke.
+    signedXdrs.forEach((signedXdr, index) => {
+      const invocation = this.assertSignedInvocation(
+        signedXdr,
+        'revoke_batch',
+        [['organizer', 0, event.organization.stellarAccount]],
+      );
+      const signedIds = invocation.args[1];
+      if (
+        !Array.isArray(signedIds) ||
+        signedIds.length !== chunks[index].length ||
+        signedIds.some((id, i) => id !== chunks[index][i])
+      ) {
+        throw new BadRequestException(
+          `Signed transaction revoke_batch chunk ${index + 1} does not match the request`,
+        );
+      }
     });
 
+    for (const signedXdr of signedXdrs) {
+      await this.stellar.submitSignedTransaction(signedXdr);
+    }
+
+    // #501 — only VALID and RESALE tickets can be revoked. Already revoked or
+    // used tickets are skipped and reported, so the audit log only records
+    // revocations that changed something.
+    const revocable = tickets.filter((t) =>
+      REVOCABLE_STATUSES.includes(t.status),
+    );
+    const revokedIds = revocable.map((t) => t.id);
+    const skipped = tickets
+      .filter((t) => !REVOCABLE_STATUSES.includes(t.status))
+      .map((t) => ({ ticketId: t.id, status: t.status }));
+
+    if (revokedIds.length === 0) {
+      return { count: 0, revokedIds, skipped };
+    }
+
+    const result = await this.prisma.ticket.updateMany({
+      // The status condition is repeated so a ticket that changed after the
+      // read above is not revoked twice or resurrected from USED.
+      where: { id: { in: revokedIds }, status: { in: REVOCABLE_STATUSES } },
+      data: { status: TicketStatus.REVOKED },
+    const result = await this.prisma.$transaction(async (tx) => {
+      const updated = await tx.ticket.updateMany({
+        where: { id: { in: ticketIds }, eventId },
+        data: { status: TicketStatus.REVOKED },
+      });
+      await this.cancelActiveListings(tx, ticketIds);
+      for (const signedXdr of signedXdrs) {
+        await this.recordProcessedTx(tx, signedXdr, 'revoke-batch', {
+          count: updated.count,
+        });
+      }
+      return updated;
+    });
+
+    // #209 — audit batch revocation (one entry per batch).
+    await this.audit?.record(userId, 'ticket.revoke_batch', 'Event', eventId, {
+      ticketIds: revokedIds,
+      count: result.count,
+      skipped,
+    });
+    return { count: result.count, revokedIds, skipped };
+  }
+
+  /** Splits chain ticket ids into contract-sized `revoke_batch` chunks. */
+  private revokeChunks(ticketIds: bigint[]): bigint[][] {
+    const chunks: bigint[][] = [];
+    for (let i = 0; i < ticketIds.length; i += REVOKE_BATCH_CHUNK_SIZE) {
+      chunks.push(ticketIds.slice(i, i + REVOKE_BATCH_CHUNK_SIZE));
+    }
+    return chunks;
+  }
+
+  /** #500 — shared by single and batch revoke confirmations. */
+  private cancelActiveListings(
+    tx: Prisma.TransactionClient,
+    ticketIds: string[],
+  ) {
+    return tx.resaleListing.updateMany({
+      where: {
+        ticketId: ticketIds.length === 1 ? ticketIds[0] : { in: ticketIds },
+        status: ResaleListingStatus.ACTIVE,
+      },
+      data: { status: ResaleListingStatus.CANCELLED },
+    });
+  }
+
+  /** Loads and validates the tickets for an organizer's batch revocation. */
+  private async loadBatchForOrganizer(
+    userId: string,
+    eventId: string,
+    ticketIds: string[],
+  ) {
+    const MAX_BATCH_SIZE = 100;
+    if (ticketIds.length === 0 || ticketIds.length > MAX_BATCH_SIZE) {
+      throw new BadRequestException(
+        `Revoke between 1 and ${MAX_BATCH_SIZE} tickets at once`,
+      );
+    }
+
+    const event = await this.getEventWithOrg(eventId);
+    await this.organizations.assertMember(event.organizationId, userId);
+    if (event.status !== EventStatus.PUBLISHED || event.chainEventId === null) {
+      throw new BadRequestException(
+        'Event has not been published on-chain yet',
+      );
+    }
+
+    const tickets = await this.prisma.ticket.findMany({
+      where: { id: { in: ticketIds }, eventId },
+    });
     if (tickets.length !== ticketIds.length) {
       throw new BadRequestException(
         'Some tickets were not found or do not belong to this event',
       );
     }
-
-    const result = await this.prisma.ticket.updateMany({
-      where: { id: { in: ticketIds } },
-      data: { status: TicketStatus.REVOKED },
-    });
-    // #209 — audit batch revocation (one entry per batch).
-    await this.audit?.record(userId, 'ticket.revoke_batch', 'Event', eventId, {
-      ticketIds,
-      count: result.count,
-    });
-    return result;
+    return { event, tickets };
   }
 
   private async assertWithinResaleLimit(userId: string) {
@@ -734,6 +1026,25 @@ export class TicketsService {
     maxResaleMultiplierBps: number,
   ): bigint {
     return (originalPrice * BigInt(maxResaleMultiplierBps)) / 10_000n;
+  }
+
+  /**
+   * #520 — mirrors the contract's `resale_split`: the royalty and the platform
+   * fee are each `floor(price * bps / 10_000)`, and the seller keeps the
+   * remainder, so the three parts always sum to `price`.
+   */
+  static computeResaleSplit(
+    price: bigint,
+    royaltyBps: number,
+    platformFeeBps: number,
+  ): { royaltyFee: bigint; platformFee: bigint; sellerProceeds: bigint } {
+    const royaltyFee = (price * BigInt(royaltyBps)) / 10_000n;
+    const platformFee = (price * BigInt(platformFeeBps)) / 10_000n;
+    return {
+      royaltyFee,
+      platformFee,
+      sellerProceeds: price - royaltyFee - platformFee,
+    };
   }
 
   private assertResalePriceCap(
@@ -801,7 +1112,10 @@ export class TicketsService {
       ['price', 2, BigInt(price)],
     ]);
 
-    const { txHash } = await this.stellar.submitSignedTransaction(signedXdr, this.attendeeSubmitOptions());
+    const { txHash } = await this.stellar.submitSignedTransaction(
+      signedXdr,
+      this.attendeeSubmitOptions(),
+    );
     // #376 — store the price the chain actually recorded, not the body's.
     const { resalePrice } = await this.stellar.verifyTicket(
       ticket.chainTicketId,
@@ -838,7 +1152,86 @@ export class TicketsService {
     }
   }
 
-  async updateResalePrice(userId: string, listingId: string, newPrice: string) {
+  /**
+   * #502 — step 1 of a price change: an unsigned `list_for_resale` at the new
+   * price. The contract allows re-listing a ticket it already has listed, so
+   * this replaces the on-chain `resale_price` once the seller signs it.
+   */
+  async buildUpdateResalePriceTx(
+    userId: string,
+    listingId: string,
+    newPrice: string,
+  ) {
+    const listing = await this.loadUpdatableListing(
+      userId,
+      listingId,
+      newPrice,
+    );
+    const owner = await this.getUserWithWallet(userId);
+    const unsignedXdr = await this.stellar.buildListForResaleTx({
+      ownerPublicKey: owner.stellarPublicKey!,
+      chainTicketId: listing.ticket.chainTicketId,
+      price: BigInt(newPrice),
+    });
+    return { unsignedXdr };
+  }
+
+  /**
+   * #502 — step 2: relays the signed re-listing, then stores the price the
+   * chain recorded. Changing only the DB price would show buyers one price
+   * while `buy_resale` charges another.
+   */
+  async updateResalePrice(
+    userId: string,
+    listingId: string,
+    newPrice: string,
+    signedXdr: string,
+  ) {
+    const replay = await this.findProcessedTx<ResaleListing>(signedXdr);
+    if (replay) return replay.value;
+    const listing = await this.loadUpdatableListing(
+      userId,
+      listingId,
+      newPrice,
+    );
+    const owner = await this.getUserWithWallet(userId);
+    this.assertSignedInvocation(signedXdr, 'list_for_resale', [
+      ['owner', 0, owner.stellarPublicKey],
+      ['ticket', 1, listing.ticket.chainTicketId],
+      ['price', 2, BigInt(newPrice)],
+    ]);
+    await this.stellar.submitSignedTransaction(
+      signedXdr,
+      this.attendeeSubmitOptions(),
+    );
+    const { resalePrice } = await this.stellar.verifyTicket(
+      listing.ticket.chainTicketId,
+    );
+
+    return this.prisma.$transaction(async (tx) => {
+      await tx.resalePriceHistory.create({
+        data: { resaleListingId: listingId, price: resalePrice },
+      });
+      const updated = await tx.resaleListing.update({
+        where: { id: listingId },
+        data: { price: resalePrice },
+      });
+      await this.recordProcessedTx(
+        tx,
+        signedXdr,
+        'update-resale-price',
+        updated,
+      );
+      return updated;
+    });
+  }
+
+  /** Shared checks for both price-change steps (#318, #319, #502). */
+  private async loadUpdatableListing(
+    userId: string,
+    listingId: string,
+    newPrice: string,
+  ) {
     const listing = await this.prisma.resaleListing.findUnique({
       where: { id: listingId },
       include: {
@@ -861,19 +1254,7 @@ export class TicketsService {
       listing.ticket.ticketType.price,
       listing.ticket.event.maxResaleMultiplierBps,
     );
-
-    return this.prisma.$transaction(async (tx) => {
-      await tx.resalePriceHistory.create({
-        data: {
-          resaleListingId: listingId,
-          price: BigInt(newPrice),
-        },
-      });
-      return tx.resaleListing.update({
-        where: { id: listingId },
-        data: { price: BigInt(newPrice) },
-      });
-    });
+    return listing;
   }
 
   async getPriceHistory(listingId: string) {
@@ -889,6 +1270,20 @@ export class TicketsService {
     });
   }
 
+  /**
+   * #503 — expiry is a database-only concept: `list_for_resale` carries no
+   * expiry, so the contract keeps an expired listing live and only the
+   * seller can delist it with `cancel_resale`. Each expired listing is
+   * therefore checked against the chain:
+   *   - still `Resale` on chain: the database keeps it RESALE / ACTIVE (it
+   *     can still be bought), and the seller is asked once to sign
+   *     `cancel_resale`;
+   *   - no longer listed on chain: the listing is CANCELLED and the ticket
+   *     takes its on-chain status;
+   *   - the chain could not be read: nothing changes, and the next run
+   *     retries.
+   * So the database never reports VALID for a ticket the chain has listed.
+   */
   async cancelExpiredListings() {
     const now = new Date();
     const expiredListings = await this.prisma.resaleListing.findMany({
@@ -896,27 +1291,78 @@ export class TicketsService {
         status: ResaleListingStatus.ACTIVE,
         expiresAt: { lte: now },
       },
+      include: {
+        ticket: { select: { id: true, chainTicketId: true } },
+        seller: { select: { email: true, name: true } },
+      },
     });
 
-    if (expiredListings.length === 0) {
-      return { cancelledCount: 0 };
+    let cancelledCount = 0;
+    let awaitingSellerCount = 0;
+    let failedCount = 0;
+
+    for (const listing of expiredListings) {
+      let onChain: OnChainTicket;
+      try {
+        onChain = await this.stellar.verifyTicket(listing.ticket.chainTicketId);
+      } catch (err) {
+        failedCount++;
+        this.logger.warn(
+          `Could not read listing ${listing.id} on chain; will retry: ${(err as Error).message}`,
+        );
+        continue;
+      }
+
+      if (onChain.status === 'Resale') {
+        awaitingSellerCount++;
+        if (!listing.expiryNotifiedAt) {
+          await this.notifyExpiredListingSeller(listing);
+          await this.prisma.resaleListing.update({
+            where: { id: listing.id },
+            data: { expiryNotifiedAt: now },
+          });
+        }
+        continue;
+      }
+
+      await this.prisma.$transaction([
+        this.prisma.resaleListing.updateMany({
+          where: { id: listing.id, status: ResaleListingStatus.ACTIVE },
+          data: { status: ResaleListingStatus.CANCELLED },
+        }),
+        this.prisma.ticket.update({
+          where: { id: listing.ticketId },
+          data: { status: TICKET_STATUS_FOR_CHAIN[onChain.status] },
+        }),
+      ]);
+      cancelledCount++;
     }
 
-    const listingIds = expiredListings.map((l) => l.id);
-    const ticketIds = expiredListings.map((l) => l.ticketId);
+    return { cancelledCount, awaitingSellerCount, failedCount };
+  }
 
-    await this.prisma.$transaction([
-      this.prisma.resaleListing.updateMany({
-        where: { id: { in: listingIds } },
-        data: { status: ResaleListingStatus.CANCELLED },
-      }),
-      this.prisma.ticket.updateMany({
-        where: { id: { in: ticketIds } },
-        data: { status: TicketStatus.VALID },
-      }),
-    ]);
-
-    return { cancelledCount: expiredListings.length };
+  private async notifyExpiredListingSeller(listing: {
+    ticketId: string;
+    ticket: { id: string };
+    seller: { email: string; name: string };
+  }) {
+    if (!this.notifications) return;
+    const event = await this.prisma.ticket.findUnique({
+      where: { id: listing.ticketId },
+      select: { event: { select: { name: true } } },
+    });
+    try {
+      await this.notifications.sendResaleListingExpired({
+        to: listing.seller.email,
+        sellerName: listing.seller.name,
+        eventName: event?.event.name ?? 'your event',
+        ticketId: listing.ticket.id,
+      });
+    } catch (err) {
+      this.logger.warn(
+        `Could not email the seller of expired listing for ticket ${listing.ticketId}: ${(err as Error).message}`,
+      );
+    }
   }
 
   async buildCancelResaleTx(userId: string, ticketId: string) {
@@ -942,7 +1388,10 @@ export class TicketsService {
       ['owner', 0, owner.stellarPublicKey],
       ['ticket', 1, ticket.chainTicketId],
     ]);
-    await this.stellar.submitSignedTransaction(signedXdr, this.attendeeSubmitOptions());
+    await this.stellar.submitSignedTransaction(
+      signedXdr,
+      this.attendeeSubmitOptions(),
+    );
 
     return this.prisma.$transaction(async (tx) => {
       await tx.ticket.update({
@@ -961,6 +1410,9 @@ export class TicketsService {
     const ticket = await this.getTicketWithOrg(ticketId);
     if (ticket.status !== TicketStatus.RESALE) {
       throw new ListingInactiveError();
+    }
+    if (ticket.ownerId === buyerId) {
+      throw new BadRequestException('Cannot buy your own listing');
     }
     const buyer = await this.getUserWithWallet(buyerId);
 
@@ -992,7 +1444,10 @@ export class TicketsService {
       ['buyer', 0, buyer.stellarPublicKey],
       ['ticket', 1, ticket.chainTicketId],
     ]);
-    await this.stellar.submitSignedTransaction(signedXdr, this.attendeeSubmitOptions());
+    await this.stellar.submitSignedTransaction(
+      signedXdr,
+      this.attendeeSubmitOptions(),
+    );
 
     // #510 — verify the new on-chain owner matches the buyer's wallet before
     // recording ownership in the DB, mirroring the check in confirmTransfer.
@@ -1021,10 +1476,26 @@ export class TicketsService {
     const take = Math.min(Math.max(limit, 1), 100);
     const cursorFilter = cursor ? this.resaleCursorWhere(cursor) : undefined;
 
+    const now = new Date();
     const rows = await this.prisma.resaleListing.findMany({
       where: {
         status: ResaleListingStatus.ACTIVE,
-        ...(cursorFilter ?? {}),
+        // #521 — hide listings nobody can buy: the contract rejects
+        // `buy_resale` once the event has started (its resale cutoff falls
+        // before `startsAt`), and a cancelled, unpublished or deleted event's
+        // tickets are not for sale. A listing past its own `expiresAt` is
+        // also dropped before the expiry job gets to it.
+        ticket: {
+          event: {
+            status: EventStatus.PUBLISHED,
+            deletedAt: null,
+            startsAt: { gt: now },
+          },
+        },
+        AND: [
+          { OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] },
+          ...(cursorFilter ? [cursorFilter] : []),
+        ],
       },
       // #374 — the marketplace is readable by any authenticated user, so the
       // query must project only the fields it renders. Never include the whole
@@ -1065,23 +1536,43 @@ export class TicketsService {
     const nextCursor =
       hasMore && last ? this.encodeResaleCursor(last.createdAt, last.id) : null;
 
-    // #320 — Compute royalty fee and seller proceeds for each listing so
-    // clients don't have to duplicate the contract math.
-    // royaltyFee   = floor(price * royaltyBps / 10_000)
-    // sellerProceeds = price - royaltyFee
+    // #320 / #520 — precompute the settlement split so clients don't have to
+    // duplicate the contract math. It mirrors `resale_split` in `buy_resale`,
+    // including the platform's resale fee, so `sellerProceeds` is what the
+    // seller actually receives.
+    const platformFeeBps = items.length > 0 ? await this.resaleFeeBps() : 0;
     const enrichedItems = items.map((listing) => {
-      const price = listing.price;
-      const royaltyBps = listing.ticket.event.royaltyBps;
-      const royaltyFee = (price * BigInt(royaltyBps)) / 10_000n;
-      const sellerProceeds = price - royaltyFee;
+      const { price } = listing;
+      const { royaltyBps } = listing.ticket.event;
+      if (platformFeeBps === null) {
+        // The fee could not be read: show the royalty, but don't guess at
+        // proceeds — an overstated figure is the bug #520 fixed.
+        return {
+          ...listing,
+          royaltyFee: (price * BigInt(royaltyBps)) / 10_000n,
+          platformFee: null,
+          sellerProceeds: null,
+        };
+      }
       return {
         ...listing,
-        royaltyFee,
-        sellerProceeds,
+        ...TicketsService.computeResaleSplit(price, royaltyBps, platformFeeBps),
       };
     });
 
     return { items: enrichedItems, nextCursor, limit: take };
+  }
+
+  /** The contract's resale fee in bps, or null when it cannot be read (#520). */
+  private async resaleFeeBps(): Promise<number | null> {
+    try {
+      return await this.stellar.getResaleFeeBps();
+    } catch (err) {
+      this.logger.warn(
+        `Resale fee unavailable; omitting seller proceeds: ${(err as Error).message}`,
+      );
+      return null;
+    }
   }
 
   findMine(userId: string, status?: TicketStatus) {
@@ -1357,7 +1848,7 @@ export class TicketsService {
    * case-insensitive compare here just mirrors that at the service layer.
    */
   private async assertSeatAvailable(eventId: string, seat?: string) {
-    const normalized = seat?.trim() ?? UNASSIGNED_SEAT;
+    const normalized = seat?.trim().toUpperCase() ?? UNASSIGNED_SEAT;
     if (!normalized || normalized.toLowerCase() === UNASSIGNED_SEAT) return;
     const existing = await this.prisma.ticket.findFirst({
       where: { eventId, seat: normalized },
@@ -1428,6 +1919,34 @@ export class TicketsService {
     }
   }
 
+  /**
+   * Attendee purchase guards, shared by build and confirm (#508, #509): the
+   * event is published on-chain and not cancelled, the ticket type's sale
+   * window is open, and a hidden ticket type is only sold with a promo code
+   * (which the caller validates).
+   */
+  private assertPurchasable<C extends bigint | number>(
+    event: { status: EventStatus; chainEventId: C | null },
+    ticketType: {
+      saleStartsAt: Date | null;
+      saleEndsAt: Date | null;
+      isHidden: boolean;
+    },
+    promoCode?: string,
+  ): asserts event is { status: EventStatus; chainEventId: C } {
+    if (event.status !== EventStatus.PUBLISHED || event.chainEventId === null) {
+      throw new BadRequestException(
+        event.status === EventStatus.CANCELLED
+          ? 'Event has been cancelled'
+          : 'Event has not been published on-chain yet',
+      );
+    }
+    this.assertSaleWindow(ticketType.saleStartsAt, ticketType.saleEndsAt);
+    if (ticketType.isHidden && !promoCode?.trim()) {
+      throw new NotFoundException('Ticket type not found');
+    }
+  }
+
   private assertSaleWindow(startsAt: Date | null, endsAt: Date | null) {
     const now = new Date();
     if (startsAt && now < startsAt)
@@ -1458,7 +1977,7 @@ export class TicketsService {
     signedXdr: string,
     fn: string,
     expected: Array<[label: string, index: number, value: unknown]>,
-  ) {
+  ): SignedInvocation {
     let invocation: SignedInvocation;
     try {
       invocation = this.stellar.decodeSignedInvocation(signedXdr);
@@ -1479,6 +1998,7 @@ export class TicketsService {
         );
       }
     }
+    return invocation;
   }
 
   private encodeResaleCursor(createdAt: Date, id: string): string {

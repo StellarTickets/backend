@@ -30,12 +30,17 @@ import { TransferTicketDto } from './dto/transfer-ticket.dto';
 import { ConfirmTransferTicketDto } from './dto/confirm-transfer-ticket.dto';
 import { ConfirmSignedTxDto } from './dto/confirm-signed-tx.dto';
 import { ConfirmCheckInDto } from './dto/confirm-check-in.dto';
+import { BuildCheckInDto } from './dto/build-check-in.dto';
 import { ListForResaleDto } from './dto/list-for-resale.dto';
 import { ConfirmListForResaleDto } from './dto/confirm-list-for-resale.dto';
-import { UpdateResalePriceDto } from './dto/update-resale-price.dto';
+import {
+  ConfirmUpdateResalePriceDto,
+  UpdateResalePriceDto,
+} from './dto/update-resale-price.dto';
 import { ResaleListingsQueryDto } from './dto/resale-listings-query.dto';
 import { MyTicketsQueryDto } from './dto/my-tickets-query.dto';
 import { RevokeBatchDto } from './dto/revoke-batch.dto';
+import { ConfirmRevokeBatchDto } from './dto/confirm-revoke-batch.dto';
 import { IssueBatchDto } from './dto/issue-batch.dto';
 
 /** Largest on-chain ticket id: the contract stores ids as u64. */
@@ -254,8 +259,9 @@ export class TicketsController {
   buildCheckInTx(
     @CurrentUser() user: CurrentUserPayload,
     @Param('ticketId') ticketId: string,
+    @Body() dto: BuildCheckInDto,
   ) {
-    return this.ticketsService.buildCheckInTx(user.userId, ticketId);
+    return this.ticketsService.buildCheckInTx(user.userId, ticketId, dto.gateId);
   }
 
   @Post(':ticketId/confirm-check-in')
@@ -296,12 +302,31 @@ export class TicketsController {
   }
 
   @Post('events/:eventId/revoke-batch')
-  revokeBatch(
+  @UseInterceptors(IdempotencyInterceptor)
+  buildRevokeBatch(
     @CurrentUser() user: CurrentUserPayload,
     @Param('eventId') eventId: string,
     @Body() dto: RevokeBatchDto,
   ) {
-    return this.ticketsService.revokeBatch(user.userId, eventId, dto.ticketIds);
+    return this.ticketsService.buildRevokeBatch(
+      user.userId,
+      eventId,
+      dto.ticketIds,
+    );
+  }
+
+  @Post('events/:eventId/confirm-revoke-batch')
+  confirmRevokeBatch(
+    @CurrentUser() user: CurrentUserPayload,
+    @Param('eventId') eventId: string,
+    @Body() dto: ConfirmRevokeBatchDto,
+  ) {
+    return this.ticketsService.confirmRevokeBatch(
+      user.userId,
+      eventId,
+      dto.ticketIds,
+      dto.signedXdrs,
+    );
   }
 
   @Post(':ticketId/list-resale')
@@ -338,16 +363,33 @@ export class TicketsController {
     return this.ticketsService.getPriceHistory(listingId);
   }
 
+  /** #502 — builds the `list_for_resale` re-listing at the new price. */
+  @Post('resale/:listingId/price')
+  @UseInterceptors(IdempotencyInterceptor)
+  buildUpdateResalePriceTx(
+    @CurrentUser() user: CurrentUserPayload,
+    @Param('listingId') listingId: string,
+    @Body() dto: UpdateResalePriceDto,
+  ) {
+    return this.ticketsService.buildUpdateResalePriceTx(
+      user.userId,
+      listingId,
+      dto.price,
+    );
+  }
+
+  /** #502 — relays the signed re-listing and stores the on-chain price. */
   @Patch('resale/:listingId/price')
   updateResalePrice(
     @CurrentUser() user: CurrentUserPayload,
     @Param('listingId') listingId: string,
-    @Body() dto: UpdateResalePriceDto,
+    @Body() dto: ConfirmUpdateResalePriceDto,
   ) {
     return this.ticketsService.updateResalePrice(
       user.userId,
       listingId,
       dto.price,
+      dto.signedXdr,
     );
   }
 

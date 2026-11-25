@@ -15,14 +15,7 @@ export class GatesService {
   ) {}
 
   async create(userId: string, eventId: string, dto: CreateGateDto) {
-    const event = await this.prisma.event.findUnique({
-      where: { id: eventId },
-    });
-    // #207 — soft-deleted events behave as not-found.
-    if (!event || (event as { deletedAt?: Date | null }).deletedAt) {
-      throw new NotFoundException('Event not found');
-    }
-    await this.organizations.assertMember(event.organizationId, userId);
+    await this.organizations.findEventForMember(eventId, userId);
 
     const existing = await this.prisma.gate.findUnique({
       where: { eventId_name: { eventId, name: dto.name } },
@@ -33,17 +26,13 @@ export class GatesService {
       );
     }
 
-    return this.prisma.gate.create({ data: { eventId, name: dto.name } });
+    return this.prisma.gate.create({
+      data: { eventId, name: dto.name, zone: dto.zone ?? null } as any,
+    });
   }
 
   async listForEvent(userId: string, eventId: string) {
-    const event = await this.prisma.event.findUnique({
-      where: { id: eventId },
-    });
-    if (!event || (event as { deletedAt?: Date | null }).deletedAt) {
-      throw new NotFoundException('Event not found');
-    }
-    await this.organizations.assertMember(event.organizationId, userId);
+    await this.organizations.findEventForMember(eventId, userId);
 
     return this.prisma.gate.findMany({
       where: { eventId },

@@ -22,6 +22,9 @@ jobs:
       - name: Generate Prisma client
         run: npx prisma generate
 
+      - name: Check for merge conflict markers
+        run: node scripts/check-conflict-markers.js
+
       - name: Typecheck
         run: npx tsc --noEmit
 
@@ -100,6 +103,21 @@ jobs:
   migration-lint:
     name: Migration lint (no schema drift)
     runs-on: ubuntu-latest
+    services:
+      # Scratch database that `--from-migrations` replays the migrations into.
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: shadow
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v4
 
@@ -110,12 +128,9 @@ jobs:
 
       - run: npm ci
 
-      # No real database is needed — the diff is computed from migration
-      # files and schema.prisma entirely in-process.
+      # Exits 2 (non-zero) when migrations and schema.prisma differ.
       - name: Check for schema drift
-        env:
-          DATABASE_URL: postgresql://dummy:dummy@localhost:5432/dummy
-        run: npx prisma migrate diff --exit-code --schema prisma/schema.prisma --from-migrations --to-schema-datamodel
+        run: npx prisma migrate diff --from-migrations prisma/migrations --to-schema-datamodel prisma/schema.prisma --shadow-database-url postgresql://test:test@localhost:5432/shadow --exit-code
 
   docs-check:
     name: Docs (generated files up to date)

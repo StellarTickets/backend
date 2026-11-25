@@ -54,4 +54,15 @@ describe('IssueTicketDto', () => {
     const errors = await validate(dto);
     expect(errors.some((e) => e.property === 'toPublicKey')).toBe(true);
   });
+  it('trims whitespace from seat', async () => {
+    const dto = plainToInstance(IssueTicketDto, {
+      ticketTypeId: UUID,
+      toUserId: UUID,
+      toPublicKey: PUBKEY,
+      seat: ' A1 ',
+    });
+
+    expect(dto.seat).toBe('A1');
+    expect(await validate(dto)).toHaveLength(0);
+  });
 });
