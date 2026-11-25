@@ -273,6 +273,19 @@ export class TicketsService {
     seat?: string,
     promoCode?: string,
   ) {
+    // #505 — The Soroban contract charges the tier price set by the organizer;
+    // it has no notion of promo codes. Passing a discounted price to
+    // buildPurchasePrimaryTx would cause the buyer to pay that amount on the
+    // build step, but the contract will still charge the full tier price on
+    // submit — the promo is silently lost. Promo-discounted purchases must go
+    // through the organizer-signed issue_ticket flow (POST /tickets/issue /
+    // POST /tickets/confirm-issue). See docs/adr/0004-promo-codes-off-chain.md.
+    if (promoCode) {
+      throw new BadRequestException(
+        'Promo codes cannot be applied to on-chain purchases. ' +
+          'Ask the event organizer to issue your ticket directly.',
+      );
+    }
     const { ticketType, event } =
       await this.getTicketTypeWithEvent(ticketTypeId);
     this.assertHasCapacity(ticketType.quantityIssued, ticketType.quantityTotal);
@@ -284,23 +297,13 @@ export class TicketsService {
       );
     }
     const buyer = await this.getUserWithWallet(buyerId);
-    const price = promoCode
-      ? (
-          await this.promoCodes!.validate(
-            event.id,
-            buyerId,
-            promoCode,
-            ticketType.price,
-          )
-        ).discountedPrice
-      : ticketType.price;
 
     const unsignedXdr = await this.stellar.buildPurchasePrimaryTx({
       buyerPublicKey: buyer.stellarPublicKey!,
       chainEventId: event.chainEventId,
       tier: ticketType.name,
       seat: seat ?? UNASSIGNED_SEAT,
-      price,
+      price: ticketType.price,
     });
     return { unsignedXdr };
   }
@@ -312,6 +315,14 @@ export class TicketsService {
     signedXdr: string,
     promoCode?: string,
   ) {
+    // #505 — guard at confirm step too so a client that bypasses build cannot
+    // consume a promo code on a full-price on-chain purchase.
+    if (promoCode) {
+      throw new BadRequestException(
+        'Promo codes cannot be applied to on-chain purchases. ' +
+          'Ask the event organizer to issue your ticket directly.',
+      );
+    }
     const { ticketType, event } =
       await this.getTicketTypeWithEvent(ticketTypeId);
     const replay = await this.findProcessedTx<Ticket>(signedXdr);
@@ -360,9 +371,6 @@ export class TicketsService {
     } catch (err) {
       this.throwOnSeatConflict(err);
       throw err;
-    }
-    if (promoCode) {
-      await this.promoCodes!.redeem(event.id, buyerId, promoCode, ticket.id);
     }
     if (this.notifications) {
       // #541 — Fire and forget: an email error should not fail a purchase
@@ -965,6 +973,18 @@ export class TicketsService {
 
   async confirmBuyResale(buyerId: string, ticketId: string, signedXdr: string) {
     const ticket = await this.getTicketWithOrg(ticketId);
+    // #511 — reject stale submissions before touching the chain. A cancelled
+    // or already-sold listing should return the domain error, not a generic
+    // chain error.
+    if (ticket.status !== TicketStatus.RESALE) {
+      throw new ListingInactiveError();
+    }
+    const activeListing = await this.prisma.resaleListing.findFirst({
+      where: { ticketId, status: ResaleListingStatus.ACTIVE },
+    });
+    if (!activeListing) {
+      throw new ListingInactiveError();
+    }
     const replay = await this.findProcessedTx<Ticket>(signedXdr);
     if (replay) return replay.value;
     const buyer = await this.getUserWithWallet(buyerId);
@@ -973,6 +993,15 @@ export class TicketsService {
       ['ticket', 1, ticket.chainTicketId],
     ]);
     await this.stellar.submitSignedTransaction(signedXdr, this.attendeeSubmitOptions());
+
+    // #510 — verify the new on-chain owner matches the buyer's wallet before
+    // recording ownership in the DB, mirroring the check in confirmTransfer.
+    const onChain = await this.stellar.verifyTicket(ticket.chainTicketId);
+    if (onChain.owner !== buyer.stellarPublicKey) {
+      throw new ConflictException(
+        'On-chain owner does not match the buyer wallet',
+      );
+    }
 
     return this.prisma.$transaction(async (tx) => {
       await tx.resaleListing.updateMany({
