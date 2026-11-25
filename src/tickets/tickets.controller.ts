@@ -15,6 +15,8 @@ import {
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { RolesGuard } from '../auth/guards/roles.guard';
+import { Roles } from '../auth/decorators/roles.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import type { CurrentUserPayload } from '../auth/decorators/current-user.decorator';
 import { ScanRateLimitGuard } from '../common/guards/scan-rate-limit.guard';
@@ -391,7 +393,12 @@ export class TicketsController {
     );
   }
 
+  // #504 — restricted to PLATFORM_ADMIN: the cron already sweeps this on a
+  // schedule; exposing it to any authenticated user allows an attendee to
+  // trigger a global DB write sweep on demand.
   @Post('resale/cancel-expired')
+  @Roles('PLATFORM_ADMIN')
+  @UseGuards(RolesGuard)
   cancelExpiredListings() {
     return this.ticketsService.cancelExpiredListings();
   }
