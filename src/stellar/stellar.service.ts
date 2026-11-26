@@ -198,8 +198,9 @@ export class StellarService {
       DEFAULT_RPC_TIMEOUT_MS;
     this.server = new rpc.Server(rpcUrl, {
       allowHttp: rpcUrl.startsWith('http://'),
-      timeout: rpcTimeoutMs,
     });
+    // SDK 16.2 declares a server timeout but does not forward it to HTTP.
+    this.server.httpClient.defaults.timeout = rpcTimeoutMs;
     this.contractId = this.config.getOrThrow<string>('TICKETING_CONTRACT_ID');
     this.contract = new Contract(this.contractId);
     this.networkPassphrase = NETWORK_PASSPHRASES[network];
